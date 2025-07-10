@@ -1,3 +1,5 @@
+// v1.0.1
+
 import AVFoundation
 import Collections
 
@@ -24,13 +26,16 @@ let MINIMUM_CLOUMNS   : Int = 30
 let DOWN_ARROW        : String = "\u{001B}[32m▾\u{001B}[0m"
 let RIGHT_ARROW       : String = "▸"
 
-let FILE_HEADER       : String = "\u{001B}[;2HFILE━TREE"
-let QUEUE_HEADER      : String = "\u{001B}[;2HQUEUE━━━━"
+let FILE_HEADER       : String = "FILE━TREE"
+let QUEUE_HEADER      : String = "QUEUE━━━━"
 
 /* TODO
 
-Collapsing folder relative line number fix
 Command line arguments
+    Music Folder Pathing
+Now Playing within queue
+Add docs for functions
+AVAudioSession
 
 */
 
@@ -512,7 +517,7 @@ struct Output {
 
     // Trust me, this works
     static func drawBorder(rows: Int, columns: Int) {
-        print("\u{001B}[2J\u{001B}[H┏FILE━TREE━\(String(repeating: "━", count: columns-10))┓")
+        print("\u{001B}[2J\u{001B}[H┏\(Terminal.shared.showQueue ? QUEUE_HEADER : FILE_HEADER)━\(String(repeating: "━", count: columns-10))┓")
         for _ in 0..<rows {print("┃\(String(repeating: " ", count: columns))┃")}
         print("┗\(String(repeating: "━", count: columns))┛",terminator: "")
         fflush(stdout)
@@ -542,7 +547,7 @@ struct Output {
     }
 
     static func tooSmall() {print("\u{001B}[2J\u{001B}[HTOO SMALL!")}
-    static func switchHeader(showQueue: Bool) {print(showQueue ? QUEUE_HEADER : FILE_HEADER)}
+    static func switchHeader(showQueue: Bool) {print("\u{001B}[;2H", showQueue ? QUEUE_HEADER : FILE_HEADER, separator: "")}
 
     static func debugLine(view: View) {
         if !DEBUG {return}
@@ -636,7 +641,9 @@ struct Input {
 
         // Collapse Folder
         if oldRange > newRange && view.viewRange.max > newRange {
+            let Point = view.viewRange.min + view.relativeLineNum - 1
             view.viewRange = (max(1, newRange - Terminal.shared.rows + 1), newRange)
+            view.relativeLineNum = Point - view.viewRange.min + 1
         }
 
         // Expand Folder
