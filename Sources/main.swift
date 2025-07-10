@@ -1,4 +1,4 @@
-// v1.0.1
+// v1.1.1
 
 import AVFoundation
 import Collections
@@ -17,14 +17,15 @@ let space   : UInt8 = 32
 let enter   : UInt8 = 10
 
 let BORDER_OFFSET     : Int = 1
-let FILE_NAME_OFFSET  : Int = 5
-let QUEUE_NAME_OFFSET : Int = 3
 
 let MINIMUM_ROWS      : Int = 5
 let MINIMUM_CLOUMNS   : Int = 30
 
 let DOWN_ARROW        : String = "\u{001B}[32m▾\u{001B}[0m"
 let RIGHT_ARROW       : String = "▸"
+
+let FILE_NAME_OFFSET  : Int = 5
+let QUEUE_NAME_OFFSET : Int = 3
 
 let FILE_HEADER       : String = "FILE━TREE"
 let QUEUE_HEADER      : String = "QUEUE━━━━"
@@ -33,7 +34,6 @@ let QUEUE_HEADER      : String = "QUEUE━━━━"
 
 Command line arguments
     Music Folder Pathing
-Now Playing within queue
 Add docs for functions
 AVAudioSession
 
@@ -78,7 +78,7 @@ class Terminal {
                 Output.drawBorder(rows: self.rows, columns: self.columns)
 
                 view.lineDeque.append(contentsOf: rootFile.getNodes(range: view.viewRange))
-                Output.fill(lines: view.lineDeque, offset: FILE_NAME_OFFSET)
+                Output.fillTree(lines: view.lineDeque)
                 Output.setDot(currentLineHeight: 1, previousLineHeight: 1)
             }
 
@@ -140,12 +140,12 @@ class Terminal {
                     let semaphore = DispatchSemaphore(value: 0)
                     Task {
                         let queue = await audioPlayer.queue
-                        Output.fill(lines: Deque<String>(queue.map{$0.name}), offset: QUEUE_NAME_OFFSET)
+                        Output.fillQueue(lines: Deque<String>(queue.map{$0.name}))
                         semaphore.signal()
                     }
                     semaphore.wait()
                 } else {
-                    Output.fill(lines: view.lineDeque, offset: FILE_NAME_OFFSET)
+                    Output.fillTree(lines: view.lineDeque)
                     Output.setDot(currentLineHeight: view.relativeLineNum, previousLineHeight: view.relativeLineNum)
                 }
 
@@ -448,6 +448,7 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
     private(set) var queue = Deque<Node>()
     private var playing = false
     private var currentPlayer: AVAudioPlayer?
+    private var currentNode: Node?
 
     func add(contentsOf nodes: [Node]) {
         queue.append(contentsOf: nodes)
@@ -459,10 +460,12 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
     }
 
     private func play() async {
-        while let node = queue.popFirst() {
+        while let node = queue.first {
+
+            currentNode = node
 
             if Terminal.shared.showQueue {
-                Output.fill(lines: Deque<String>(queue.map{$0.name}), offset: QUEUE_NAME_OFFSET)
+                Output.fillQueue(lines: Deque<String>(queue.map{$0.name}))
             }
 
             do {
@@ -481,7 +484,11 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
             } catch {
                 // Do something later
             }
+
+            queue.removeFirst()
         }
+
+        Output.fillQueue(lines: Deque<String>(queue.map{$0.name}))
         playing = false
     }
 
@@ -523,12 +530,12 @@ struct Output {
         fflush(stdout)
     }
 
-    static func fill(lines: Deque<String>, offset: Int) {
-        let emptyLine = (String(repeating: " ", count: Terminal.shared.columns - 2))
+    static func fillTree(lines: Deque<String>) {
+        let emptyLine = (String(repeating: " ", count: Terminal.shared.columns))
         for rowNum in 0..<Terminal.shared.rows {
             // Need the extra +1 because rowNum starts at 0
             let emptyCursorPos = "\u{001B}[\(rowNum + BORDER_OFFSET + 1);2H"
-            let lineCursorPos = "\u{001B}[\(rowNum + BORDER_OFFSET + 1);\(offset)H"
+            let lineCursorPos = "\u{001B}[\(rowNum + BORDER_OFFSET + 1);\(FILE_NAME_OFFSET)H"
 
             if rowNum < lines.count {
                 print(
@@ -539,6 +546,32 @@ struct Output {
             } else {
                 print(emptyCursorPos,emptyLine,separator: "")
             }
+        }
+    }
+
+    static func fillQueue(lines: Deque<String>) {
+        let emptyLine = (String(repeating: " ", count: Terminal.shared.columns))
+        for rowNum in 0..<Terminal.shared.rows {
+            // Need the extra +1 because rowNum starts at 0
+            let emptyCursorPos = "\u{001B}[\(rowNum + BORDER_OFFSET + 1);2H"
+            let lineCursorPos = "\u{001B}[\(rowNum + BORDER_OFFSET + 1);\(QUEUE_NAME_OFFSET)H"
+
+            if rowNum == 0 && lines.count > 0 {
+                print(
+                    emptyCursorPos, emptyLine,
+                    lineCursorPos, "🎵 ", lines[rowNum].prefix(Terminal.shared.columns - 4), // 4 b/c emojis are weird sizes
+                    separator: ""
+                )
+            } else if rowNum < lines.count {
+                print(
+                    emptyCursorPos,emptyLine,
+                    lineCursorPos,lines[rowNum].prefix(Terminal.shared.columns - 1),
+                    separator: ""
+                )
+            } else {
+                print(emptyCursorPos,emptyLine,separator: "")
+            }
+
         }
     }
 
@@ -596,7 +629,7 @@ struct Input {
             let newLine = rootFile.getNodeName(at: view.viewRange.min)
             view.lineDeque.prepend(newLine)
 
-            Output.fill(lines: view.lineDeque, offset: FILE_NAME_OFFSET)
+            Output.fillTree(lines: view.lineDeque)
             Output.setDot(currentLineHeight: view.relativeLineNum, previousLineHeight: view.relativeLineNum)
 
         } else {
@@ -619,7 +652,7 @@ struct Input {
             let newLine = rootFile.getNodeName(at: view.viewRange.max)
             view.lineDeque.append(newLine)
 
-            Output.fill(lines: view.lineDeque, offset: FILE_NAME_OFFSET)
+            Output.fillTree(lines: view.lineDeque)
             Output.setDot(currentLineHeight: view.relativeLineNum, previousLineHeight: view.relativeLineNum)
 
         } else {
@@ -656,7 +689,7 @@ struct Input {
         view.lineDeque.removeAll(keepingCapacity: true)
         view.lineDeque.append(contentsOf: rootFile.getNodes(range: view.viewRange))
 
-        Output.fill(lines: view.lineDeque, offset: FILE_NAME_OFFSET)
+        Output.fillTree(lines: view.lineDeque)
         Output.setDot(currentLineHeight: view.relativeLineNum, previousLineHeight: view.relativeLineNum)
         Output.debugLine(view: view)
     }
@@ -696,7 +729,7 @@ struct Input {
 
         semaphore.wait()
 
-        Output.fill(lines: view.lineDeque, offset: FILE_NAME_OFFSET)
+        Output.fillTree(lines: view.lineDeque)
         Output.setDot(currentLineHeight: view.relativeLineNum, previousLineHeight: view.relativeLineNum)
         Output.debugLine(view: view)
     }
@@ -712,12 +745,12 @@ struct Input {
             let semaphore = DispatchSemaphore(value: 0)
             Task {
                 let queue = await audioPlayer.queue
-                Output.fill(lines: Deque<String>(queue.map{$0.name}), offset: QUEUE_NAME_OFFSET)
+                Output.fillQueue(lines: Deque<String>(queue.map{$0.name}))
                 semaphore.signal()
             }
             semaphore.wait()
         } else {
-            Output.fill(lines: view.lineDeque, offset: FILE_NAME_OFFSET)
+            Output.fillTree(lines: view.lineDeque)
             Output.setDot(currentLineHeight: view.relativeLineNum, previousLineHeight: view.relativeLineNum)
         }
     }
