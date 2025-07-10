@@ -1,16 +1,18 @@
-// v1.1.1
+// v1.2.1
 
 import AVFoundation
 import Collections
 
 let DEBUG: Bool = false
 
+let v       : UInt8 = 118
 let s       : UInt8 = 115
 let q       : UInt8 = 113
 let p       : UInt8 = 112
 let k       : UInt8 = 107
 let j       : UInt8 = 106
 let btick   : UInt8 = 96
+let V       : UInt8 = 86
 let down    : UInt8 = 66
 let up      : UInt8 = 65
 let space   : UInt8 = 32
@@ -35,7 +37,8 @@ let QUEUE_HEADER      : String = "QUEUE━━━━"
 Command line arguments
     Music Folder Pathing
 Add docs for functions
-AVAudioSession
+Work on error handling
+Volume control
 
 */
 
@@ -449,6 +452,7 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
     private var playing = false
     private var currentPlayer: AVAudioPlayer?
     private var currentNode: Node?
+    private var volume: Float = 1.0
 
     func add(contentsOf nodes: [Node]) {
         queue.append(contentsOf: nodes)
@@ -473,6 +477,7 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
                 player.delegate = self
 
                 currentPlayer = player
+                player.setVolume(volume, fadeDuration: 0)
                 player.play()
 
                 await withCheckedContinuation { cont in
@@ -502,6 +507,15 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
         guard let player = currentPlayer else {return}
         player.stop()
         self.playerDidFinish()
+    }
+
+    func volume(up: Bool) {
+        guard let player = currentPlayer else {return}
+
+        if up {volume = min(1.0, volume + 0.05)}
+        else  {volume = max(0.0, volume - 0.05)}
+
+        player.setVolume(volume, fadeDuration: 0)
     }
 
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
@@ -736,6 +750,7 @@ struct Input {
 
     static func pauseTrack(audioPlayer: AudioPlayer) {Task {await audioPlayer.pause()}}
     static func skipTrack(audioPlayer: AudioPlayer)  {Task {await audioPlayer.skip()}}
+    static func changeVolume(audioPlayer : AudioPlayer, volumeUp: Bool) {Task {await audioPlayer.volume(up: volumeUp)}}
 
     static func switchView(view: View, audioPlayer: AudioPlayer) {
         Terminal.shared.showQueue = !Terminal.shared.showQueue
@@ -800,6 +815,8 @@ input.setEventHandler {
         case enter  : if !showQueue {Input.playFiles(view: &filesView,  rootFile: rootFile, audioPlayer: audioPlayer)}
         case p      : Input.pauseTrack(audioPlayer: audioPlayer)
         case s      : Input.skipTrack(audioPlayer: audioPlayer)
+        case V      : Input.changeVolume(audioPlayer: audioPlayer, volumeUp: true)
+        case v      : Input.changeVolume(audioPlayer: audioPlayer, volumeUp: false)
         case btick  : Input.switchView(view: filesView, audioPlayer: audioPlayer)
         case q      : Input.quit(input: input, Exit: &Exit)
         default: break
