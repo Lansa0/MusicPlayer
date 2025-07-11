@@ -9,17 +9,16 @@ let package = Package(
     ],
 
     dependencies: [
-        .package(
-        url: "https://github.com/apple/swift-collections.git",
-        .upToNextMinor(from: "1.2.0") // or `.upToNextMajor
-        )
+        .package(url: "https://github.com/apple/swift-collections.git", .upToNextMinor(from: "1.2.0")),
+        .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.0.0"),
     ],
 
     targets: [
         .executableTarget(
             name: "Music",
             dependencies: [
-                .product(name: "Collections", package: "swift-collections")
+                .product(name: "Collections", package: "swift-collections"),
+                .product(name: "ArgumentParser", package: "swift-argument-parser")
             ],
             path: "Sources"
         ),
@@ -27,6 +26,11 @@ let package = Package(
         .executableTarget(
             name: "WindowSizeTest",
             path: "Tests/window_size"
+        ),
+
+        .executableTarget(
+            name: "UrlSerial",
+            path: "Tests/url_serialization"
         )
 
     ]
