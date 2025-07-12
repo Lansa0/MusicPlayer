@@ -198,8 +198,15 @@ func decode() -> Node {
     }
 }
 
-let root = decode()
-root.traverse()
+// let root = decode()
+// root.traverse()
+
+let fileManager = FileManager.default
+let home = FileManager.default.homeDirectoryForCurrentUser
+let configPath = home.appendingPathComponent(".config/CLIMusicPlayer/files.json")
+
+print(fileManager.fileExists(atPath: configPath.path()))
+
 
 
 // let root = scanFiles()
