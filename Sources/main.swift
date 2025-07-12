@@ -1,4 +1,4 @@
-// v1.4.3
+// v1.4.4
 
 import AVFoundation
 import Collections
@@ -35,6 +35,9 @@ Ncurses :>
 
 struct Arguments : ParsableCommand {
     @Flag var scan: Bool = false
+
+    @Flag(name: [.customLong("scroll-off")])
+    var scrollOff: Bool = false
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -916,7 +919,7 @@ input.setEventHandler {
     if n < 1 || Terminal.shared.tooSmall { return }
 
     // scroll input
-    else if buff.starts(with: [0x1B, 0x5B, 0x3C]) {
+    else if buff.starts(with: [0x1B, 0x5B, 0x3C]) && !args.scrollOff {
         guard let _key = Keys.getScrollInput(buffer: buff) else {return}
         key = _key
     }
