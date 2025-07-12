@@ -31,6 +31,11 @@ let package = Package(
         .executableTarget(
             name: "UrlSerial",
             path: "Tests/url_serialization"
+        ),
+
+        .executableTarget(
+            name: "Scroll",
+            path: "Tests/scrolling"
         )
 
     ]
