@@ -1,4 +1,4 @@
-// v1.3.2
+// v1.3.3
 
 import AVFoundation
 import Collections
@@ -35,8 +35,7 @@ let QUEUE_HEADER      : String = "QUEUE━━━━"
 
 /* TODO
 
-Command line arguments
-    Music Folder Pathing
+ Music Folder Pathing
 Add docs for functions
 Work on error handling
 Ncurses :>
@@ -582,8 +581,8 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
     func volume(up: Bool) {
         guard let player = currentPlayer else {return}
 
-        if up {volume = min(1.0, volume + 0.05)}
-        else  {volume = max(0.0, volume - 0.05)}
+        if up {volume = min(1.0, volume + 0.025)}
+        else  {volume = max(0.0, volume - 0.025)}
 
         player.setVolume(volume, fadeDuration: 0)
     }
