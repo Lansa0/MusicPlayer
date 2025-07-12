@@ -1,23 +1,10 @@
-// v1.3.3
+// v1.4.3
 
 import AVFoundation
 import Collections
 import ArgumentParser
 
 let DEBUG: Bool = false
-
-let v       : UInt8 = 118
-let s       : UInt8 = 115
-let q       : UInt8 = 113
-let p       : UInt8 = 112
-let k       : UInt8 = 107
-let j       : UInt8 = 106
-let btick   : UInt8 = 96
-let V       : UInt8 = 86
-let down    : UInt8 = 66
-let up      : UInt8 = 65
-let space   : UInt8 = 32
-let enter   : UInt8 = 10
 
 let BORDER_OFFSET     : Int = 1
 
@@ -67,7 +54,8 @@ class Terminal {
 
     func setupTerminal(view: inout View, rootNode: Node) {
         tcgetattr(STDIN_FILENO, &OriginalTerm)
-        print("\u{001B}[?1049h\u{001B}[?25l") // alternate buffer + hide cursor
+        print("\u{001B}[?1049h\u{001B}[?25l")   // alternate buffer + hide cursor
+        print("\u{001B}[?1000h\u{001B}[?1006h") // enable scrolling
 
         // Set terminal to non canonical
         var CopyTerm = OriginalTerm
@@ -75,6 +63,8 @@ class Terminal {
         CopyTerm.c_cc.6 = 1
         CopyTerm.c_cc.5 = 0
         tcsetattr(STDIN_FILENO, TCSANOW, &CopyTerm)
+
+
 
         if let (rows, columns) = getTerminalSize() {
             self.rows = rows  - 2 - (DEBUG ? 1 : 0)
@@ -99,7 +89,9 @@ class Terminal {
     }
 
     func resetTerminal() {
-        print("\u{001B}[?25h\u{001B}[?1049l", terminator: "")  // show cursor + original buffer
+        print("\u{001B}[?25h\u{001B}[?1049l", terminator: "")   // show cursor + original buffer
+        print("\u{001B}[?1000l\u{001B}[?1006l", terminator: "") // disable scrolling
+
         tcsetattr(STDIN_FILENO, TCSANOW, &OriginalTerm)
         exit(0)
     }
@@ -687,6 +679,53 @@ struct Output {
 //[INPUT]//////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
 
+enum Keys {
+    case v
+    case s
+    case q
+    case p
+    case k
+    case j
+    case btick
+    case V
+    case down
+    case up
+    case space
+    case enter
+
+    private static let KeyCodes: [UInt8 : Keys] = [
+        118 : .v,
+        115 : .s,
+        113 : .q,
+        112 : .p,
+        107 : .up,
+        106 : .down,
+        96  : .btick,
+        86  : .V,
+        32  : .space,
+        10  : .enter
+    ]
+
+    static func getKeyboardInput(c: UInt8) -> Keys? {
+        return KeyCodes[c]
+    }
+
+    static func getScrollInput(buffer: [UInt8]) -> Keys? {
+        var index = 3
+        var cb = ""
+
+        while index < buffer.count, buffer[index] != 0x3B {
+            let scaler = UnicodeScalar(buffer[index])
+            cb.append(Character(scaler))
+            index += 1
+        }
+
+        guard let cb = UInt8(cb) else {return nil}
+        return cb == 64 ? Keys.up : Keys.down
+    }
+
+}
+
 struct View {
     var lineDeque       : Deque<String> = []
     var relativeLineNum : Int = 1
@@ -869,29 +908,45 @@ var Exit: Bool = false
 let input = DispatchSource.makeReadSource(fileDescriptor: STDIN_FILENO, queue: .main)
 input.setEventHandler {
 
-    var buff = [UInt8](repeating: 0, count: 3)
-    let n = read(STDIN_FILENO, &buff, 3)
-    let key: UInt8
+    var buff = [UInt8](repeating: 0, count: 32)
+    let n = read(STDIN_FILENO, &buff, 32)
+    let key: Keys
 
+    // invalid
     if n < 1 || Terminal.shared.tooSmall { return }
-    else if n == 3 && buff[0] == 27 && buff[1] == 91 {key = buff[2]} // check if arrow key was pressed
-    else {key = buff[0]}
+
+    // scroll input
+    else if buff.starts(with: [0x1B, 0x5B, 0x3C]) {
+        guard let _key = Keys.getScrollInput(buffer: buff) else {return}
+        key = _key
+    }
+    // arrow key input
+    else if n == 3 && buff.starts(with: [27, 91]) {
+        key = buff[2] == 65 ? Keys.up : Keys.down
+    }
+    // normal key input
+    else {
+        guard let _key = Keys.getKeyboardInput(c: buff[0]) else {return}
+        key = _key
+    }
 
     let showQueue: Bool = Terminal.shared.showQueue
 
     switch key {
-        case k,up   : if !showQueue {Input.scrollUp(view: &filesView, rootFile: rootFile)}
-        case j,down : if !showQueue {Input.scrollDown(view: &filesView, rootFile: rootFile)}
-        case space  : if !showQueue {Input.expandFolder(view: &filesView, rootFile: rootFile)}
-        case enter  : if !showQueue {Input.playFiles(view: &filesView,  rootFile: rootFile, audioPlayer: audioPlayer)}
-        case p      : Input.pauseTrack(audioPlayer: audioPlayer)
-        case s      : Input.skipTrack(audioPlayer: audioPlayer)
-        case V      : Input.changeVolume(audioPlayer: audioPlayer, volumeUp: true)
-        case v      : Input.changeVolume(audioPlayer: audioPlayer, volumeUp: false)
-        case btick  : Input.switchView(view: filesView, audioPlayer: audioPlayer)
-        case q      : Input.quit(input: input, Exit: &Exit)
+        case .up    : if !showQueue {Input.scrollUp(view: &filesView, rootFile: rootFile)}
+        case .down  : if !showQueue {Input.scrollDown(view: &filesView, rootFile: rootFile)}
+        case .space : if !showQueue {Input.expandFolder(view: &filesView, rootFile: rootFile)}
+        case .enter : if !showQueue {Input.playFiles(view: &filesView,  rootFile: rootFile, audioPlayer: audioPlayer)}
+        case .p     : Input.pauseTrack(audioPlayer: audioPlayer)
+        case .s     : Input.skipTrack(audioPlayer: audioPlayer)
+        case .V     : Input.changeVolume(audioPlayer: audioPlayer, volumeUp: true)
+        case .v     : Input.changeVolume(audioPlayer: audioPlayer, volumeUp: false)
+        case .btick : Input.switchView(view: filesView, audioPlayer: audioPlayer)
+        case .q     : Input.quit(input: input, Exit: &Exit)
+
         default: break
     }
+
 }
 input.resume()
 
