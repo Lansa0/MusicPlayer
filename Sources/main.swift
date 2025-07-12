@@ -1,7 +1,8 @@
-// v1.2.1
+// v1.3.2
 
 import AVFoundation
 import Collections
+import ArgumentParser
 
 let DEBUG: Bool = false
 
@@ -38,9 +39,17 @@ Command line arguments
     Music Folder Pathing
 Add docs for functions
 Work on error handling
-Volume control
+Ncurses :>
 
 */
+
+///////////////////////////////////////////////////////////////////////////
+//[ARGUMENT/PARSER]////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+
+struct Arguments : ParsableCommand {
+    @Flag var scan: Bool = false
+}
 
 ///////////////////////////////////////////////////////////////////////////
 //[TERMINAL]///////////////////////////////////////////////////////////////
@@ -173,12 +182,12 @@ class Terminal {
 //[FILE HANDLER]///////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
 
-class Node: @unchecked Sendable {
+class Node: @unchecked Sendable, Codable {
     let url: URL?
     let name: String
     let trackNumber: Int?
     let discNumber: Int?
-    private(set) var active: Bool
+    private(set) var active: Bool = false
     private(set) var nodes: [Node]
 
     init(name str: String, url: URL? = nil, trackNumber: Int? = nil, discNumber: Int? = nil) {
@@ -186,7 +195,6 @@ class Node: @unchecked Sendable {
         self.name = str
         self.trackNumber = trackNumber
         self.discNumber = discNumber
-        self.active = false
         self.nodes = []
     }
 
@@ -317,6 +325,14 @@ class Node: @unchecked Sendable {
         return str
     }
 
+    enum CodingKeys: String, CodingKey {
+        case name
+        case url
+        case nodes
+        case trackNumber
+        case discNumber
+    }
+
 }
 
 func scanFiles() -> Node {
@@ -434,12 +450,64 @@ func scanFiles() -> Node {
                 nodeStack.append(contentsOf: node.nodes)
             }
 
+            encode(root: rootNode)
+
             return rootNode
         } catch {
             exit(1)
         }
     }
     exit(1)
+}
+
+func encode(root: Node) {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = .sortedKeys
+    do {
+        let data = try encoder.encode(root)
+
+        let fileManager = FileManager.default
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let configPath = home.appending(path: ".config/Lansa0MusicPlayer/files.json", directoryHint: .notDirectory)
+
+        if !fileManager.fileExists(atPath: configPath.path()) {
+            let parent = configPath.deletingLastPathComponent()
+            if !fileManager.fileExists(atPath: parent.path()) {
+                do {
+                    try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
+                } catch  {
+                    print(error)
+                    exit(1)
+                }
+            }
+
+            let defaultData = "{}".data(using: .utf8)
+            fileManager.createFile(atPath: configPath.path(), contents: defaultData)
+        }
+
+        try data.write(to: configPath)
+    } catch {
+        print(error)
+        exit(1)
+    }
+}
+
+func decode() -> Node {
+    let decoder = JSONDecoder()
+
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    let configPath = home.appending(path: ".config/Lansa0MusicPlayer/files.json", directoryHint: .notDirectory)
+
+    do {
+        let data = try Data(contentsOf: configPath)
+        let root = try decoder.decode(Node.self, from: data)
+        root.toggleActive()
+
+        return root
+    } catch {
+        print("Error Decoding")
+        exit(1)
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -493,7 +561,9 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
             queue.removeFirst()
         }
 
-        Output.fillQueue(lines: Deque<String>(queue.map{$0.name}))
+        if Terminal.shared.showQueue {
+            Output.fillQueue(lines: Deque<String>(queue.map{$0.name}))
+        }
         playing = false
     }
 
@@ -782,7 +852,9 @@ struct Input {
 //[MAIN]///////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
 
-let rootFile = scanFiles()
+let args = Arguments.parseOrExit()
+
+let rootFile: Node = args.scan ? scanFiles() : decode()
 let audioPlayer = AudioPlayer()
 var filesView = View(totalRange: rootFile.numActiveNodes())
 
