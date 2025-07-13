@@ -1,4 +1,4 @@
-// v1.4.4
+// v1.5.5
 
 import AVFoundation
 import Collections
@@ -20,24 +20,61 @@ let QUEUE_NAME_OFFSET : Int = 3
 let FILE_HEADER       : String = "FILE━TREE"
 let QUEUE_HEADER      : String = "QUEUE━━━━"
 
+let FILES_PATH        : String = ".config/Lansa0MusicPlayer/files.json"
+let CONFIG_PATH       : String = ".config/Lansa0MusicPlayer/config.json"
+
 /* TODO
-
- Music Folder Pathing
-Add docs for functions
-Work on error handling
-Ncurses :>
-
+    Add docs for functions
+    Work on error handling
 */
 
 ///////////////////////////////////////////////////////////////////////////
 //[ARGUMENT/PARSER]////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
 
+struct Config: Codable {
+    var path: String
+}
+
 struct Arguments : ParsableCommand {
     @Flag var scan: Bool = false
 
     @Flag(name: [.customLong("scroll-off")])
     var scrollOff: Bool = false
+
+    @Flag var debug: Bool = false
+
+    @Option(name: [.customLong("path")])
+    var path: String? = nil
+
+    func setup() {
+        if let inputPath = self.path {
+
+            let fileManager = FileManager.default
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let configPath = home.appending(path: CONFIG_PATH, directoryHint: .notDirectory)
+
+            do {
+                let parent = configPath.deletingLastPathComponent()
+                try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
+
+                let encoder = JSONEncoder()
+
+                let config = Config(path: inputPath)
+                let data = try encoder.encode(config)
+                try data.write(to: configPath)
+
+            } catch {
+                Arguments.exit(withError: error)
+            }
+
+            Arguments.exit()
+        }
+
+        Terminal.shared.debug = debug
+
+    }
+
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -48,6 +85,8 @@ class Terminal {
     nonisolated(unsafe) static let shared = Terminal()
 
     private var OriginalTerm = termios()
+
+    var debug: Bool = false
 
     var tooSmall  : Bool = false
     var showQueue : Bool = false
@@ -67,10 +106,8 @@ class Terminal {
         CopyTerm.c_cc.5 = 0
         tcsetattr(STDIN_FILENO, TCSANOW, &CopyTerm)
 
-
-
         if let (rows, columns) = getTerminalSize() {
-            self.rows = rows  - 2 - (DEBUG ? 1 : 0)
+            self.rows = rows  - 2 - (self.debug ? 1 : 0)
             self.columns = columns - 2
 
             view.viewRange = (1, min(self.rows, view.totalRange))
@@ -110,7 +147,7 @@ class Terminal {
                 let expanding: Bool = self.rows < (rows - 2)
 
                 self.tooSmall = false
-                self.rows = rows - 2 - (DEBUG ? 1 : 0)
+                self.rows = rows  - 2 - (self.debug ? 1 : 0)
                 self.columns = columns - 2
                 Output.drawBorder(rows: self.rows, columns: self.columns)
 
@@ -329,179 +366,184 @@ class Node: @unchecked Sendable, Codable {
 
 }
 
-func scanFiles() -> Node {
+struct FileHandler {
 
-    let fileManager = FileManager.default
-    guard let DownloadsURL: URL = fileManager.urls(for:.downloadsDirectory, in:.userDomainMask).first else {exit(1)}
-
-    var isDirectory: ObjCBool = false
-    let musicFolderURL: URL = DownloadsURL
-        .appending(component: "Music", directoryHint: .isDirectory)
-        .appending(component: "Downloads", directoryHint: .isDirectory)
-
-    if fileManager.fileExists(atPath: musicFolderURL.path(), isDirectory: &isDirectory) && isDirectory.boolValue {
-
-        let rootNode = Node(name: "All Music")
-        rootNode.toggleActive()
-
-        var folderStack: [URL] = [musicFolderURL]
-
-        do {
-            var fileCount: Int = 0
-            var filesSkipped: Int = 0
-
-            print("Files Loaded  :\nFiles Skipped :", terminator: "\u{001B}[1F")
-
-            while !folderStack.isEmpty {
-                let folder: URL = folderStack.popLast()!
-
-                let fileURLS: [URL] = try fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
-
-                for url: URL in fileURLS {
-                    if (try url.resourceValues(forKeys: [.isDirectoryKey])).isDirectory! {
-                        folderStack.append(url)
-
-                    } else if url.pathExtension == "mp3" {
-                        let asset = AVURLAsset(url: url)
-                        let semaphore = DispatchSemaphore(value: 0)
-
-                        var fileSkipped: Bool = true
-
-                        var artistValue : String?
-                        var albumValue  : String?
-                        var titleValue  : String?
-                        var trackNumber : Int?
-                        var discNumber  : Int?
-
-                        Task {
-                            for format in try await asset.load(.availableMetadataFormats) {
-                                let metadata = try await asset.loadMetadata(for: format)
-
-                                guard let artistMetadata    = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .id3MetadataBand).first ??
-                                                              AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierArtist).first else {continue}
-                                guard let albumMetadata     = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierAlbumName).first else {continue}
-                                guard let titleMetadata     = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierTitle).first else {continue}
-                                guard let trackNumMetadata  = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .id3MetadataTrackNumber).first else {continue}
-
-                                fileSkipped = false
-
-                                artistValue = try await artistMetadata.load(.stringValue)!
-                                albumValue  = try await albumMetadata.load(.stringValue)!
-                                titleValue  = try await titleMetadata.load(.stringValue)!
-
-                                let trackNumString = try await trackNumMetadata.load(.stringValue)!
-                                trackNumber = Int(trackNumString.split(separator: "/", maxSplits: 2, omittingEmptySubsequences: true)[0])!
-
-                                if let discNumMetaData = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .id3MetadataPartOfASet).first {
-                                    let discNumberString = try await discNumMetaData.load(.stringValue)!
-                                    discNumber = Int(discNumberString.split(separator: "/", maxSplits: 2, omittingEmptySubsequences: true)[0])!
-                                }
-                            }
-                            semaphore.signal()
-                        }
-                        semaphore.wait()
-
-                        if !fileSkipped {
-
-                            let artistNode: Node
-                            if let nodeIndex = rootNode.nodes.firstIndex(where: {$0.name == artistValue!}) {
-                                artistNode = rootNode.nodes[nodeIndex]
-                            } else {
-                                artistNode = Node(name: artistValue!)
-                                rootNode.add(artistNode)
-                            }
-
-                            let albumNode: Node
-                            if let nodeIndex = artistNode.nodes.firstIndex(where: {$0.name == albumValue!}) {
-                                albumNode = artistNode.nodes[nodeIndex]
-                            } else {
-                                albumNode = Node(name: albumValue!)
-                                artistNode.add(albumNode)
-                            }
-
-                            let trackNode: Node = Node(name: titleValue!, url: url, trackNumber: trackNumber, discNumber: discNumber)
-                            albumNode.add(trackNode)
-
-                            fileCount += 1
-                            print("\u{001B}[16C\(fileCount)", terminator: "\r")
-                        } else {
-                            filesSkipped += 1
-                            print("\u{001B}[1B\u{001B}[16C\(filesSkipped)", terminator: "\u{001B}[1F")
-                        }
-                        fflush(stdout)
-
-                    }
-                }
-            }
-
-            print("\u{001B}[1B")
- 
-            // Deeply sort node
-            var nodeStack: [Node] = [rootNode]
-            nodeStack.reserveCapacity(fileCount)
-            while let node = nodeStack.popLast() {
-                node.sort()
-                nodeStack.append(contentsOf: node.nodes)
-            }
-
-            encode(root: rootNode)
-
-            return rootNode
-        } catch {
-            exit(1)
-        }
-    }
-    exit(1)
-}
-
-func encode(root: Node) {
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = .sortedKeys
-    do {
-        let data = try encoder.encode(root)
+    static func scanFiles() -> Node {
 
         let fileManager = FileManager.default
         let home = FileManager.default.homeDirectoryForCurrentUser
-        let configPath = home.appending(path: ".config/Lansa0MusicPlayer/files.json", directoryHint: .notDirectory)
+        let configPath = home.appending(path: CONFIG_PATH, directoryHint: .notDirectory)
 
-        if !fileManager.fileExists(atPath: configPath.path()) {
-            let parent = configPath.deletingLastPathComponent()
-            if !fileManager.fileExists(atPath: parent.path()) {
-                do {
-                    try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
-                } catch  {
-                    print(error)
-                    exit(1)
-                }
-            }
+        let decoder = JSONDecoder()
+        let configData: Config
 
-            let defaultData = "{}".data(using: .utf8)
-            fileManager.createFile(atPath: configPath.path(), contents: defaultData)
+        do {
+            let jsonData = try Data(contentsOf: configPath)
+            configData = try decoder.decode(Config.self, from: jsonData)
+        } catch {
+            print(error)
+            exit(1)
         }
 
-        try data.write(to: configPath)
-    } catch {
-        print(error)
+        var isDirectory: ObjCBool = false
+        let musicFolderURL: URL = URL(filePath: configData.path)
+
+        if fileManager.fileExists(atPath: musicFolderURL.path(), isDirectory: &isDirectory) && isDirectory.boolValue {
+
+            let rootNode = Node(name: "All Music")
+            rootNode.toggleActive()
+
+            var folderStack: [URL] = [musicFolderURL]
+
+            do {
+                var fileCount: Int = 0
+                var filesSkipped: Int = 0
+
+                print("Files Loaded  :\nFiles Skipped :", terminator: "\u{001B}[1F")
+
+                while !folderStack.isEmpty {
+                    let folder: URL = folderStack.popLast()!
+
+                    let fileURLS: [URL] = try fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+
+                    for url: URL in fileURLS {
+                        if (try url.resourceValues(forKeys: [.isDirectoryKey])).isDirectory! {
+                            folderStack.append(url)
+
+                        } else if url.pathExtension == "mp3" {
+                            let asset = AVURLAsset(url: url)
+                            let semaphore = DispatchSemaphore(value: 0)
+
+                            var fileSkipped: Bool = true
+
+                            var artistValue : String?
+                            var albumValue  : String?
+                            var titleValue  : String?
+                            var trackNumber : Int?
+                            var discNumber  : Int?
+
+                            Task {
+                                for format in try await asset.load(.availableMetadataFormats) {
+                                    let metadata = try await asset.loadMetadata(for: format)
+
+                                    guard let artistMetadata    = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .id3MetadataBand).first ??
+                                                                AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierArtist).first else {continue}
+                                    guard let albumMetadata     = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierAlbumName).first else {continue}
+                                    guard let titleMetadata     = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierTitle).first else {continue}
+                                    guard let trackNumMetadata  = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .id3MetadataTrackNumber).first else {continue}
+
+                                    fileSkipped = false
+
+                                    artistValue = try await artistMetadata.load(.stringValue)!
+                                    albumValue  = try await albumMetadata.load(.stringValue)!
+                                    titleValue  = try await titleMetadata.load(.stringValue)!
+
+                                    let trackNumString = try await trackNumMetadata.load(.stringValue)!
+                                    trackNumber = Int(trackNumString.split(separator: "/", maxSplits: 2, omittingEmptySubsequences: true)[0])!
+
+                                    if let discNumMetaData = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .id3MetadataPartOfASet).first {
+                                        let discNumberString = try await discNumMetaData.load(.stringValue)!
+                                        discNumber = Int(discNumberString.split(separator: "/", maxSplits: 2, omittingEmptySubsequences: true)[0])!
+                                    }
+                                }
+                                semaphore.signal()
+                            }
+                            semaphore.wait()
+
+                            if !fileSkipped {
+
+                                let artistNode: Node
+                                if let nodeIndex = rootNode.nodes.firstIndex(where: {$0.name == artistValue!}) {
+                                    artistNode = rootNode.nodes[nodeIndex]
+                                } else {
+                                    artistNode = Node(name: artistValue!)
+                                    rootNode.add(artistNode)
+                                }
+
+                                let albumNode: Node
+                                if let nodeIndex = artistNode.nodes.firstIndex(where: {$0.name == albumValue!}) {
+                                    albumNode = artistNode.nodes[nodeIndex]
+                                } else {
+                                    albumNode = Node(name: albumValue!)
+                                    artistNode.add(albumNode)
+                                }
+
+                                let trackNode: Node = Node(name: titleValue!, url: url, trackNumber: trackNumber, discNumber: discNumber)
+                                albumNode.add(trackNode)
+
+                                fileCount += 1
+                                print("\u{001B}[16C\(fileCount)", terminator: "\r")
+                            } else {
+                                filesSkipped += 1
+                                print("\u{001B}[1B\u{001B}[16C\(filesSkipped)", terminator: "\u{001B}[1F")
+                            }
+                            fflush(stdout)
+
+                        }
+                    }
+                }
+
+                print("\u{001B}[1B")
+
+                // Deeply sort node
+                var nodeStack: [Node] = [rootNode]
+                nodeStack.reserveCapacity(fileCount)
+                while let node = nodeStack.popLast() {
+                    node.sort()
+                    nodeStack.append(contentsOf: node.nodes)
+                }
+
+                self.encodeNode(root: rootNode)
+
+                return rootNode
+            } catch {
+                print(error)
+                exit(1)
+            }
+        }
+
+        print("Unable to open folder \(musicFolderURL.path())")
         exit(1)
     }
-}
 
-func decode() -> Node {
-    let decoder = JSONDecoder()
+    static private func encodeNode(root: Node) {
+        let fileManager = FileManager.default
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let configPath = home.appending(path: FILES_PATH, directoryHint: .notDirectory)
 
-    let home = FileManager.default.homeDirectoryForCurrentUser
-    let configPath = home.appending(path: ".config/Lansa0MusicPlayer/files.json", directoryHint: .notDirectory)
+        do {
+            let parent = configPath.deletingLastPathComponent()
+            try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
 
-    do {
-        let data = try Data(contentsOf: configPath)
-        let root = try decoder.decode(Node.self, from: data)
-        root.toggleActive()
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .sortedKeys
 
-        return root
-    } catch {
-        print("Error Decoding")
-        exit(1)
+            let data = try encoder.encode(root)
+            try data.write(to: configPath)
+
+        } catch {
+            print(error)
+            exit(1)
+        }
     }
+
+    static func decodeNode() -> Node {
+        let decoder = JSONDecoder()
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let configPath = home.appending(path: FILES_PATH, directoryHint: .notDirectory)
+
+        do {
+            let data = try Data(contentsOf: configPath)
+            let root = try decoder.decode(Node.self, from: data)
+            root.toggleActive()
+
+            return root
+        } catch {
+            print(error)
+            exit(1)
+        }
+    }
+
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -661,7 +703,8 @@ struct Output {
     static func switchHeader(showQueue: Bool) {print("\u{001B}[;2H", showQueue ? QUEUE_HEADER : FILE_HEADER, separator: "")}
 
     static func debugLine(view: View) {
-        if !DEBUG {return}
+        if !Terminal.shared.debug {return}
+        // if !DEBUG {return}
         let rows: Int = Terminal.shared.rows
         let columns: Int = Terminal.shared.columns
 
@@ -894,8 +937,9 @@ struct Input {
 ///////////////////////////////////////////////////////////////////////////
 
 let args = Arguments.parseOrExit()
+args.setup()
 
-let rootFile: Node = args.scan ? scanFiles() : decode()
+let rootFile: Node = args.scan ? FileHandler.scanFiles() : FileHandler.decodeNode()
 let audioPlayer = AudioPlayer()
 var filesView = View(totalRange: rootFile.numActiveNodes())
 
