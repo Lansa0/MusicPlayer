@@ -1,10 +1,8 @@
-// v1.5.5
+// v1.5.7
 
 import AVFoundation
 import Collections
 import ArgumentParser
-
-let DEBUG: Bool = false
 
 let BORDER_OFFSET     : Int = 1
 
@@ -26,6 +24,8 @@ let CONFIG_PATH       : String = ".config/Lansa0MusicPlayer/config.json"
 /* TODO
     Add docs for functions
     Work on error handling
+    Argument help messages
+    Now Playing widget (??)
 */
 
 ///////////////////////////////////////////////////////////////////////////
@@ -72,7 +72,6 @@ struct Arguments : ParsableCommand {
         }
 
         Terminal.shared.debug = debug
-
     }
 
 }
@@ -427,10 +426,11 @@ struct FileHandler {
                                     let metadata = try await asset.loadMetadata(for: format)
 
                                     guard let artistMetadata    = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .id3MetadataBand).first ??
-                                                                AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierArtist).first else {continue}
+                                                                  AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierArtist).first else {continue}
                                     guard let albumMetadata     = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierAlbumName).first else {continue}
                                     guard let titleMetadata     = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierTitle).first else {continue}
-                                    guard let trackNumMetadata  = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .id3MetadataTrackNumber).first else {continue}
+                                    guard let trackNumMetadata  = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .id3MetadataTrackNumber).first ??
+                                                                  metadata.first(where: {($0.key as? String)?.uppercased() == "TRK" && $0.keySpace?.rawValue == "org.id3"}) else {continue}
 
                                     fileSkipped = false
 
@@ -556,7 +556,7 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
     private var playing = false
     private var currentPlayer: AVAudioPlayer?
     private var currentNode: Node?
-    private var volume: Float = 1.0
+    private var volume: Float = 0.5
 
     func add(contentsOf nodes: [Node]) {
         queue.append(contentsOf: nodes)
@@ -618,8 +618,8 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
     func volume(up: Bool) {
         guard let player = currentPlayer else {return}
 
-        if up {volume = min(1.0, volume + 0.025)}
-        else  {volume = max(0.0, volume - 0.025)}
+        if up {volume = min(1.0, volume + 0.05)}
+        else  {volume = max(0.0, volume - 0.05)}
 
         player.setVolume(volume, fadeDuration: 0)
     }
