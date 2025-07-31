@@ -1,8 +1,10 @@
-// v1.5.7
+// v1.6.7
 
 import AVFoundation
 import Collections
 import ArgumentParser
+import SQLite
+import CryptoKit
 
 let BORDER_OFFSET     : Int = 1
 
@@ -26,6 +28,7 @@ let CONFIG_PATH       : String = ".config/Lansa0MusicPlayer/config.json"
     Work on error handling
     Argument help messages
     Now Playing widget (??)
+    Flatten tree array
 */
 
 ///////////////////////////////////////////////////////////////////////////
@@ -93,7 +96,7 @@ class Terminal {
     var rows    : Int = 0
     var columns : Int = 0
 
-    func setupTerminal(view: inout View, rootNode: Node) {
+    func setup(view: inout View, rootNode: Node) {
         tcgetattr(STDIN_FILENO, &OriginalTerm)
         print("\u{001B}[?1049h\u{001B}[?25l")   // alternate buffer + hide cursor
         print("\u{001B}[?1000h\u{001B}[?1006h") // enable scrolling
@@ -127,11 +130,13 @@ class Terminal {
 
     }
 
-    func resetTerminal() {
+    func resetTerminal(msg: String = "Program exited") {
         print("\u{001B}[?25h\u{001B}[?1049l", terminator: "")   // show cursor + original buffer
         print("\u{001B}[?1000l\u{001B}[?1006l", terminator: "") // disable scrolling
 
         tcsetattr(STDIN_FILENO, TCSANOW, &OriginalTerm)
+
+        print(msg)
         exit(0)
     }
 
@@ -209,19 +214,120 @@ class Terminal {
 }
 
 ///////////////////////////////////////////////////////////////////////////
+//[DATABASE HANDLER]///////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+
+class Database {
+    nonisolated(unsafe) static let shared = Database()
+
+    private var dbPath: String?
+    private var persistantConnection: Connection?
+
+    private let files   = Table("files")
+    private let history = Table("history")
+
+    private let file_hash   = SQLite.Expression<String>("file_hash")
+    private let artist_name = SQLite.Expression<String>("artist_name")
+    private let album_name  = SQLite.Expression<String>("album_name")
+    private let track_name  = SQLite.Expression<String>("track_name")
+    private let history_id  = SQLite.Expression<Int>("history_id")
+    private let date        = SQLite.Expression<String>("date")
+
+    func setup() {
+        do {
+
+            guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {exit(1)}
+
+            let dirURL = appSupport.appendingPathComponent("Lansa0MusicPlayer")
+            try FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true, attributes: nil)
+
+            let dbURL = dirURL.appendingPathComponent("history.sqlite3")
+            if !FileManager.default.fileExists(atPath: dbURL.path) {
+                FileManager.default.createFile(atPath: dbURL.path(), contents: nil, attributes: nil)
+            }
+
+            self.dbPath = dbURL.path
+            let db = try Connection(self.dbPath!)
+
+            try db.run(files.create(ifNotExists: true) { t in
+                t.column(file_hash, primaryKey: true)
+                t.column(artist_name)
+                t.column(album_name)
+                t.column(track_name)
+            })
+
+            try db.run(history.create(ifNotExists: true) { t in
+                t.column(history_id, primaryKey: true)
+                t.column(file_hash)
+                t.column(date)
+                t.foreignKey(file_hash, references: files, file_hash)
+            })
+
+        } catch {
+            print(error)
+            exit(1)
+        }
+    }
+
+    func openConnection() {do {self.persistantConnection = try Connection(self.dbPath!)} catch {print(error);exit(1)}}
+    func closeConnection() {self.persistantConnection = nil}
+
+    func addFile(file_hash hash: String, artist: String, album: String, track: String) {
+        do {
+            if self.persistantConnection == nil {
+                self.persistantConnection = try Connection(self.dbPath!)
+            }
+            guard let db = self.persistantConnection else {return}
+
+            try db.run(files.insert(or: .ignore,
+                file_hash <- hash,
+                artist_name <- artist,
+                album_name <- album,
+                track_name <- track
+            ))
+
+        } catch {
+            print(error)
+            exit(1)
+        }
+    }
+
+    func addHistory(file_hash hash: String) {
+        do {
+            let db = try Connection(self.dbPath!)
+
+            let timeFormatter = ISO8601DateFormatter()
+            timeFormatter.timeZone = TimeZone.current
+            let dateTime: String = timeFormatter.string(from: Date())
+
+            try db.run(history.insert(
+                file_hash <- hash,
+                date <- dateTime
+            ))
+
+        } catch {
+            Terminal.shared.resetTerminal(msg: error.localizedDescription)
+        }
+    }
+
+}
+
+///////////////////////////////////////////////////////////////////////////
 //[FILE HANDLER]///////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
 
 class Node: @unchecked Sendable, Codable {
     let url: URL?
+    let file_hash: String?
     let name: String
     let trackNumber: Int?
     let discNumber: Int?
     private(set) var active: Bool = false
     private(set) var nodes: [Node]
 
-    init(name str: String, url: URL? = nil, trackNumber: Int? = nil, discNumber: Int? = nil) {
+    init(name str: String, url: URL? = nil, file_hash: String? = nil, trackNumber: Int? = nil, discNumber: Int? = nil) {
         self.url = url
+        self.file_hash = file_hash
         self.name = str
         self.trackNumber = trackNumber
         self.discNumber = discNumber
@@ -358,6 +464,7 @@ class Node: @unchecked Sendable, Codable {
     enum CodingKeys: String, CodingKey {
         case name
         case url
+        case file_hash
         case nodes
         case trackNumber
         case discNumber
@@ -399,6 +506,8 @@ struct FileHandler {
                 var filesSkipped: Int = 0
 
                 print("Files Loaded  :\nFiles Skipped :", terminator: "\u{001B}[1F")
+
+                Database.shared.openConnection()
 
                 while !folderStack.isEmpty {
                     let folder: URL = folderStack.popLast()!
@@ -448,9 +557,17 @@ struct FileHandler {
                                 }
                                 semaphore.signal()
                             }
+
                             semaphore.wait()
 
                             if !fileSkipped {
+
+                                let hash: String = hashFile(
+                                    artist: artistValue!,
+                                    album:  albumValue!,
+                                    track: titleValue!,
+                                    track_num: trackNumber!
+                                )
 
                                 let artistNode: Node
                                 if let nodeIndex = rootNode.nodes.firstIndex(where: {$0.name == artistValue!}) {
@@ -468,11 +585,25 @@ struct FileHandler {
                                     artistNode.add(albumNode)
                                 }
 
-                                let trackNode: Node = Node(name: titleValue!, url: url, trackNumber: trackNumber, discNumber: discNumber)
+                                let trackNode: Node = Node(
+                                    name: titleValue!,
+                                    url: url,
+                                    file_hash: hash,
+                                    trackNumber: trackNumber,
+                                    discNumber: discNumber
+                                )
                                 albumNode.add(trackNode)
+
+                                Database.shared.addFile(
+                                    file_hash: hash,
+                                    artist: artistValue!,
+                                    album:  albumValue!,
+                                    track: titleValue!
+                                )
 
                                 fileCount += 1
                                 print("\u{001B}[16C\(fileCount)", terminator: "\r")
+
                             } else {
                                 filesSkipped += 1
                                 print("\u{001B}[1B\u{001B}[16C\(filesSkipped)", terminator: "\u{001B}[1F")
@@ -483,6 +614,7 @@ struct FileHandler {
                     }
                 }
 
+                Database.shared.closeConnection()
                 print("\u{001B}[1B")
 
                 // Deeply sort node
@@ -504,6 +636,17 @@ struct FileHandler {
 
         print("Unable to open folder \(musicFolderURL.path())")
         exit(1)
+    }
+
+    static private func hashFile(artist: String, album: String, track: String, track_num: Int) -> String {
+        let s = "\(artist.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))|" +
+                "\(album.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)))|" +
+                "\(track.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)))|" +
+                "\(track_num)"
+        let d = Data(s.utf8)
+
+        let digest = SHA256.hash(data: d)
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 
     static private func encodeNode(root: Node) {
@@ -555,8 +698,8 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
     private(set) var queue = Deque<Node>()
     private var playing = false
     private var currentPlayer: AVAudioPlayer?
-    private var currentNode: Node?
     private var volume: Float = 0.5
+    private var skipped: Bool = false
 
     func add(contentsOf nodes: [Node]) {
         queue.append(contentsOf: nodes)
@@ -569,8 +712,6 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
 
     private func play() async {
         while let node = queue.first {
-
-            currentNode = node
 
             if Terminal.shared.showQueue {
                 Output.fillQueue(lines: Deque<String>(queue.map{$0.name}))
@@ -588,10 +729,15 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
                     continuation = cont
                 }
 
+                if !skipped {
+                    Database.shared.addHistory(file_hash: node.file_hash!)
+                    skipped = false
+                }
+
                 currentPlayer = nil
 
             } catch {
-                // Do something later
+                Terminal.shared.resetTerminal(msg: error.localizedDescription)
             }
 
             queue.removeFirst()
@@ -610,6 +756,7 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
     }
 
     func skip() {
+        skipped = true
         guard let player = currentPlayer else {return}
         player.stop()
         self.playerDidFinish()
@@ -631,7 +778,6 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
     private func playerDidFinish() {
         continuation?.resume()
         continuation = nil
-
     }
 
 }
@@ -939,11 +1085,13 @@ struct Input {
 let args = Arguments.parseOrExit()
 args.setup()
 
+Database.shared.setup()
+
 let rootFile: Node = args.scan ? FileHandler.scanFiles() : FileHandler.decodeNode()
 let audioPlayer = AudioPlayer()
 var filesView = View(totalRange: rootFile.numActiveNodes())
 
-Terminal.shared.setupTerminal(view: &filesView, rootNode: rootFile)
+Terminal.shared.setup(view: &filesView, rootNode: rootFile)
 signal(SIGINT)   {_ in Terminal.shared.resetTerminal()}
 signal(SIGWINCH) {_ in Terminal.shared.onResize(view: &filesView, rootNode: rootFile, audioPlayer: audioPlayer)}
 
@@ -969,7 +1117,7 @@ input.setEventHandler {
     }
     // arrow key input
     else if n == 3 && buff.starts(with: [27, 91]) {
-        key = buff[2] == 65 ? Keys.up : Keys.down
+        key = (buff[2] == 65) ? Keys.up : Keys.down
     }
     // normal key input
     else {
