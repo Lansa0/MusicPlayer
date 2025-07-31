@@ -1,4 +1,4 @@
-// v1.6.8
+// v1.7.8
 
 import AVFoundation
 import Collections
@@ -741,7 +741,7 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
                 Terminal.shared.resetTerminal(msg: error.localizedDescription)
             }
 
-            queue.removeFirst()
+            _ = queue.popFirst()
         }
 
         if Terminal.shared.showQueue {
@@ -761,6 +761,15 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
         guard let player = currentPlayer else {return}
         player.stop()
         self.playerDidFinish()
+    }
+
+    func clearQueue() {
+        queue.removeAll(keepingCapacity: true)
+        if Terminal.shared.showQueue {
+            Output.fillQueue(lines: Deque<String>(queue.map{$0.name}))
+        }
+
+        skip()
     }
 
     func volume(up: Bool) {
@@ -885,6 +894,7 @@ enum Keys {
     case up
     case space
     case enter
+    case c
 
     private static let KeyCodes: [UInt8 : Keys] = [
         118 : .v,
@@ -896,7 +906,8 @@ enum Keys {
         96  : .btick,
         86  : .V,
         32  : .space,
-        10  : .enter
+        10  : .enter,
+        99  : .c
     ]
 
     static func getKeyboardInput(c: UInt8) -> Keys? {
@@ -1051,6 +1062,7 @@ struct Input {
 
     static func pauseTrack(audioPlayer: AudioPlayer) {Task {await audioPlayer.pause()}}
     static func skipTrack(audioPlayer: AudioPlayer)  {Task {await audioPlayer.skip()}}
+    static func clearQueue(audioPlayer: AudioPlayer) {Task {await audioPlayer.clearQueue()}}
     static func changeVolume(audioPlayer : AudioPlayer, volumeUp: Bool) {Task {await audioPlayer.volume(up: volumeUp)}}
 
     static func switchView(view: View, audioPlayer: AudioPlayer) {
@@ -1135,6 +1147,7 @@ input.setEventHandler {
         case .enter : if !showQueue {Input.playFiles(view: &filesView,  rootFile: rootFile, audioPlayer: audioPlayer)}
         case .p     : Input.pauseTrack(audioPlayer: audioPlayer)
         case .s     : Input.skipTrack(audioPlayer: audioPlayer)
+        case .c     : Input.clearQueue(audioPlayer: audioPlayer)
         case .V     : Input.changeVolume(audioPlayer: audioPlayer, volumeUp: true)
         case .v     : Input.changeVolume(audioPlayer: audioPlayer, volumeUp: false)
         case .btick : Input.switchView(view: filesView, audioPlayer: audioPlayer)
