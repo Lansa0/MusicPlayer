@@ -1,4 +1,4 @@
-// v1.6.7
+// v1.6.8
 
 import AVFoundation
 import Collections
@@ -731,8 +731,9 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
 
                 if !skipped {
                     Database.shared.addHistory(file_hash: node.file_hash!)
-                    skipped = false
                 }
+
+                skipped = false
 
                 currentPlayer = nil
 
