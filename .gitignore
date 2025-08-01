@@ -11,3 +11,4 @@ build.zsh
 Tests/url_serialization/files.json
 Tests/history/TestDB.sqlite3
 Tests/scratchpad
+t.ipynb
