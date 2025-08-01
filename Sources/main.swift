@@ -1,4 +1,5 @@
-// v1.7.8
+// v1.7.9
+// FIRST RELEASE
 
 import AVFoundation
 import Collections
@@ -24,8 +25,8 @@ let FILES_PATH        : String = ".config/Lansa0MusicPlayer/files.json"
 let CONFIG_PATH       : String = ".config/Lansa0MusicPlayer/config.json"
 
 /* TODO
-    Add docs for functions
-    Work on error handling
+    Add (better) docs for functions
+    Work on error handling (might be good enough)
     Argument help messages
     Now Playing widget (??)
     Flatten tree array
@@ -42,13 +43,21 @@ struct Config: Codable {
 struct Arguments : ParsableCommand {
     @Flag var scan: Bool = false
 
-    @Flag(name: [.customLong("scroll-off")])
+    @Flag(
+        name: [.customLong("scroll-off")],
+        help: ArgumentHelp("Turns off scroll wheel/pad based navigation")
+    )
     var scrollOff: Bool = false
 
     @Flag var debug: Bool = false
 
-    @Option(name: [.customLong("path")])
+    @Option(
+        help: ArgumentHelp("Sets the path to where mp3 files will be searched")
+    )
     var path: String? = nil
+
+    @Flag(help: ArgumentHelp("User manual"))
+    var manual: Bool = false
 
     func setup() {
         if let inputPath = self.path {
@@ -74,6 +83,11 @@ struct Arguments : ParsableCommand {
             Arguments.exit()
         }
 
+        else if manual {
+            Output.userManual()
+            Arguments.exit()
+        }
+
         Terminal.shared.debug = debug
     }
 
@@ -96,6 +110,13 @@ class Terminal {
     var rows    : Int = 0
     var columns : Int = 0
 
+    /// - Parameters:
+    ///   - view: Current view parameters
+    ///   - rootNode: root, node
+    ///
+    /// Sets the terminal to an appropriate form
+    /// and figures out the inital size of the terminal.
+    /// As well as rendering the inital content
     func setup(view: inout View, rootNode: Node) {
         tcgetattr(STDIN_FILENO, &OriginalTerm)
         print("\u{001B}[?1049h\u{001B}[?25l")   // alternate buffer + hide cursor
@@ -130,6 +151,7 @@ class Terminal {
 
     }
 
+    /// - Parameter msg: Final message before the program terminates, where you'll see what error occurred
     func resetTerminal(msg: String = "Program exited") {
         print("\u{001B}[?25h\u{001B}[?1049l", terminator: "")   // show cursor + original buffer
         print("\u{001B}[?1000l\u{001B}[?1006l", terminator: "") // disable scrolling
@@ -140,6 +162,12 @@ class Terminal {
         exit(0)
     }
 
+    /// - Parameters:
+    ///   - view: Current view parameters
+    ///   - rootNode: root, node
+    ///   - audioPlayer: player, audio
+    /// 
+    /// Handles how the program should display itself when the user sizes the terminal
     func onResize(view: inout View, rootNode: Node, audioPlayer: AudioPlayer) {
         if let (rows, columns) = getTerminalSize() {
             if rows < MINIMUM_ROWS || columns < MINIMUM_CLOUMNS {
@@ -202,6 +230,7 @@ class Terminal {
         }
     }
 
+    /// - Returns: The current size of the terminal in rows (height) and columns (width)
     private func getTerminalSize() -> (rows: Int, columns: Int)? {
         var w = winsize()
         if ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == 0 {
@@ -272,6 +301,18 @@ class Database {
     func openConnection() {do {self.persistantConnection = try Connection(self.dbPath!)} catch {print(error);exit(1)}}
     func closeConnection() {self.persistantConnection = nil}
 
+    /// - Parameters:
+    ///   - hash: Hashed contents of the files metadata
+    ///   - artist: Artist name
+    ///   - album: Album Name
+    ///   - track: Track Name
+    ///
+    /// Inserts given file data into the files table of the database for cross reference of played tracks
+    ///
+    /// Very sensitive to changes in metadata. Two different files with identical metadata will
+    /// result in the same hash, regardless if the audio data is the same. Two different files
+    /// with identical audio data but any differences in metadata (i.e extra spaces, misspelling,
+    /// special character) excluding case sensitivity will result in a different hash
     func addFile(file_hash hash: String, artist: String, album: String, track: String) {
         do {
             if self.persistantConnection == nil {
@@ -292,6 +333,11 @@ class Database {
         }
     }
 
+    /// - Parameter hash: Hashed contents of the files metadata
+    ///
+    /// Stores file hash and date time into the history table of the database
+    ///
+    /// Use the hash to cross reference the data with the files table
     func addHistory(file_hash hash: String) {
         do {
             let db = try Connection(self.dbPath!)
@@ -337,6 +383,7 @@ class Node: @unchecked Sendable, Codable {
     func toggleActive() {active = !active}
     func add(_ node: Node) {self.nodes.append(node)}
 
+    /// Sorts nodes based on disc number, then track number, then name
     func sort() {
         self.nodes.sort {
             let left = ($0.discNumber ?? Int.max, $0.trackNumber ?? Int.max, $0.name.lowercased())
@@ -348,6 +395,7 @@ class Node: @unchecked Sendable, Codable {
     // Traversal functions
 
     /// - Returns: Number of active nodes under the root node
+    /// 
     /// (Does not count active nodes whose parent node is inactive)
     func numActiveNodes() -> Int {
         var count: Int = 0
@@ -797,6 +845,33 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
 ///////////////////////////////////////////////////////////////////////////
 
 struct Output {
+
+    static func userManual() {
+        print("""
+        -- Navigation --
+
+            j | Down Arrow | Down Scroll : Scroll down
+            k | Up Arrow | Up Scroll : Scroll up
+            Space : Expand/Collapse folder
+            Enter : Add track to queue
+                    If used on a folder, add all tracks under the folder
+                    Automatically expands folder
+            ` (backtick) : Switches view between queue and file tree
+
+        -- Playback --
+
+            p : Pause player
+            s : Skip current track
+            c : Clear queue
+            v (lowercase) : Volume down
+            V (uppercase) : Volume up
+
+        -- Misc --
+
+            q : quit
+
+        """)
+    }
 
     // Trust me, this works
     static func drawBorder(rows: Int, columns: Int) {
