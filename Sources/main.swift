@@ -1,5 +1,4 @@
-// v1.7.9
-// FIRST RELEASE
+// v1.8.10
 
 import AVFoundation
 import Collections
@@ -747,7 +746,8 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
     private var playing = false
     private var currentPlayer: AVAudioPlayer?
     private var volume: Float = 0.5
-    private var skipped: Bool = false
+    private var skipTracking: Bool = false
+    var looping: Bool = false
 
     func add(contentsOf nodes: [Node]) {
         queue.append(contentsOf: nodes)
@@ -760,6 +760,10 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
 
     private func play() async {
         while let node = queue.first {
+
+            // ━━━━◉━━━━
+            // ━━━━○━━━━
+            // ━━━━●━━━━
 
             if Terminal.shared.showQueue {
                 Output.fillQueue(lines: Deque<String>(queue.map{$0.name}))
@@ -777,11 +781,11 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
                     continuation = cont
                 }
 
-                if !skipped {
+                if !skipTracking {
                     Database.shared.addHistory(file_hash: node.file_hash!)
                 }
 
-                skipped = false
+                skipTracking = false
 
                 currentPlayer = nil
 
@@ -789,7 +793,10 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
                 Terminal.shared.resetTerminal(msg: error.localizedDescription)
             }
 
-            _ = queue.popFirst()
+            if !looping {
+                _ = queue.popFirst()
+            }
+
         }
 
         if Terminal.shared.showQueue {
@@ -800,13 +807,21 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
 
     func pause() {
         guard let player = currentPlayer else {return}
-        if player.isPlaying { player.pause()}
-        else { player.play()}
+        if player.isPlaying { player.pause() }
+        else { player.play() }
     }
 
     func skip() {
-        skipped = true
         guard let player = currentPlayer else {return}
+
+        if player.currentTime > (player.duration / 2) {
+            skipTracking = false
+        } else {
+            skipTracking = true
+        }
+
+        looping = false
+
         player.stop()
         self.playerDidFinish()
     }
@@ -818,6 +833,10 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
         }
 
         skip()
+    }
+
+    func toggleLoop() {
+        looping = !looping
     }
 
     func volume(up: Bool) {
@@ -848,6 +867,19 @@ struct Output {
 
     static func userManual() {
         print("""
+        -- Setup --
+
+            If this is your first time using, run the --path argument
+            and set it to the path to the folder with your music downloads
+
+            Then run the --scan argument to scan the files inside the set
+            folder. This will automatically take you to the player once
+            scanning is finished
+
+        -- Tracking --
+
+            W.I.P
+
         -- Navigation --
 
             j | Down Arrow | Down Scroll : Scroll down
@@ -970,6 +1002,7 @@ enum Keys {
     case space
     case enter
     case c
+    case l
 
     private static let KeyCodes: [UInt8 : Keys] = [
         118 : .v,
@@ -982,7 +1015,8 @@ enum Keys {
         86  : .V,
         32  : .space,
         10  : .enter,
-        99  : .c
+        99  : .c,
+        108 : .l
     ]
 
     static func getKeyboardInput(c: UInt8) -> Keys? {
@@ -1139,6 +1173,7 @@ struct Input {
     static func skipTrack(audioPlayer: AudioPlayer)  {Task {await audioPlayer.skip()}}
     static func clearQueue(audioPlayer: AudioPlayer) {Task {await audioPlayer.clearQueue()}}
     static func changeVolume(audioPlayer : AudioPlayer, volumeUp: Bool) {Task {await audioPlayer.volume(up: volumeUp)}}
+    static func toggleLoop(audioPlayer : AudioPlayer) {Task { await audioPlayer.toggleLoop()}}
 
     static func switchView(view: View, audioPlayer: AudioPlayer) {
         Terminal.shared.showQueue = !Terminal.shared.showQueue
@@ -1225,6 +1260,7 @@ input.setEventHandler {
         case .c     : Input.clearQueue(audioPlayer: audioPlayer)
         case .V     : Input.changeVolume(audioPlayer: audioPlayer, volumeUp: true)
         case .v     : Input.changeVolume(audioPlayer: audioPlayer, volumeUp: false)
+        case .l     : Input.toggleLoop(audioPlayer: audioPlayer)
         case .btick : Input.switchView(view: filesView, audioPlayer: audioPlayer)
         case .q     : Input.quit(input: input, Exit: &Exit)
 
