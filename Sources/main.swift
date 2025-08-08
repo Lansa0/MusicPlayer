@@ -1,4 +1,4 @@
-// v1.8.10
+// v1.9.10
 
 import AVFoundation
 import Collections
@@ -29,6 +29,8 @@ let CONFIG_PATH       : String = ".config/Lansa0MusicPlayer/config.json"
     Argument help messages
     Now Playing widget (??)
     Flatten tree array
+
+    Assign Magic numbers to actual variables
 */
 
 ///////////////////////////////////////////////////////////////////////////
@@ -109,6 +111,9 @@ class Terminal {
     var rows    : Int = 0
     var columns : Int = 0
 
+    var lastKnownCurrentTime : TimeInterval?
+    var lastKnownDuration    : TimeInterval?
+
     /// - Parameters:
     ///   - view: Current view parameters
     ///   - rootNode: root, node
@@ -128,25 +133,26 @@ class Terminal {
         CopyTerm.c_cc.5 = 0
         tcsetattr(STDIN_FILENO, TCSANOW, &CopyTerm)
 
-        if let (rows, columns) = getTerminalSize() {
-            self.rows = rows  - 2 - (self.debug ? 1 : 0)
-            self.columns = columns - 2
+        guard let (rows,columns) = getTerminalSize() else {return}
 
-            view.viewRange = (1, min(self.rows, view.totalRange))
+        self.rows = rows - 3 - (self.debug ? 1 : 0)
+        self.columns = columns - 2
 
-            if rows < MINIMUM_ROWS || columns < MINIMUM_CLOUMNS {
-                self.tooSmall = true
-                Output.tooSmall()
-            } else {
-                Output.drawBorder(rows: self.rows, columns: self.columns)
+        view.viewRange = (1, min(self.rows, view.totalRange))
 
-                view.lineDeque.append(contentsOf: rootFile.getNodes(range: view.viewRange))
-                Output.fillTree(lines: view.lineDeque)
-                Output.setDot(currentLineHeight: 1, previousLineHeight: 1)
-            }
+        if rows < MINIMUM_ROWS || columns < MINIMUM_CLOUMNS {
+            self.tooSmall = true
+            Output.tooSmall()
+        } else {
+            Output.drawBorder(rows: self.rows, columns: self.columns)
+            Output.progressBar(currentTime: nil, duration: nil)
 
-            Output.debugLine(view: view)
+            view.lineDeque.append(contentsOf: rootFile.getNodes(range: view.viewRange))
+            Output.fillTree(lines: view.lineDeque)
+            Output.setDot(currentLineHeight: 1, previousLineHeight: 1)
         }
+
+        Output.debugLine(view: view)
 
     }
 
@@ -168,65 +174,67 @@ class Terminal {
     /// 
     /// Handles how the program should display itself when the user sizes the terminal
     func onResize(view: inout View, rootNode: Node, audioPlayer: AudioPlayer) {
-        if let (rows, columns) = getTerminalSize() {
-            if rows < MINIMUM_ROWS || columns < MINIMUM_CLOUMNS {
-                self.tooSmall = true
-                Output.tooSmall()
+        guard let (rows, columns) = getTerminalSize() else {return}
 
-            } else {
+        if rows < MINIMUM_ROWS || columns < MINIMUM_CLOUMNS {
+            self.tooSmall = true
+            Output.tooSmall()
+        } 
+        else {
 
-                let expanding: Bool = self.rows < (rows - 2)
+            let expanding: Bool = self.rows < (rows - 3)
 
-                self.tooSmall = false
-                self.rows = rows  - 2 - (self.debug ? 1 : 0)
-                self.columns = columns - 2
-                Output.drawBorder(rows: self.rows, columns: self.columns)
+            self.tooSmall = false
+            self.rows = rows - 3 - (self.debug ? 1 : 0)
+            self.columns = columns - 2
 
-                // Refer to Tests/window_size/main.swift to make sense of this
-                if expanding {
-                    if view.viewRange.min > 1 {
-                        let Point = view.viewRange.min + view.relativeLineNum - 1
-                        view.viewRange.max = view.viewRange.min + self.rows
-                        if view.viewRange.max > view.totalRange {
-                            let leftover = view.viewRange.max - view.totalRange
-                            view.viewRange.max = view.totalRange
-                            view.viewRange.min = max(view.viewRange.min + 1 - leftover, 1)
-                            view.relativeLineNum = Point - view.viewRange.min + 1
-                        }
-                    } else {
-                        view.viewRange.max = min(view.totalRange, self.rows)
+            Output.drawBorder(rows: self.rows, columns: self.columns)
+            Output.progressBar(currentTime: self.lastKnownCurrentTime, duration: self.lastKnownDuration)
+
+            // Refer to Tests/window_size/main.swift to make sense of this
+            if expanding {
+                if view.viewRange.min > 1 {
+                    let Point = view.viewRange.min + view.relativeLineNum - 1
+                    view.viewRange.max = view.viewRange.min + self.rows
+                    if view.viewRange.max > view.totalRange {
+                        let leftover = view.viewRange.max - view.totalRange
+                        view.viewRange.max = view.totalRange
+                        view.viewRange.min = max(view.viewRange.min + 1 - leftover, 1)
+                        view.relativeLineNum = Point - view.viewRange.min + 1
                     }
-                }
-
-                else {
-                    if !(view.viewRange.min == 1 && view.viewRange.max == view.totalRange) {
-                        view.viewRange.max = view.viewRange.min + self.rows - 1
-                    } else {
-                        view.viewRange.max = min(view.totalRange, self.rows)
-                    }
-                    view.relativeLineNum = min(view.relativeLineNum, self.rows)
-                }
-
-                view.lineDeque.removeAll(keepingCapacity: true)
-                view.lineDeque.append(contentsOf: rootFile.getNodes(range: view.viewRange))
-
-                if showQueue {
-                    let semaphore = DispatchSemaphore(value: 0)
-                    Task {
-                        let queue = await audioPlayer.queue
-                        Output.fillQueue(lines: Deque<String>(queue.map{$0.name}))
-                        semaphore.signal()
-                    }
-                    semaphore.wait()
                 } else {
-                    Output.fillTree(lines: view.lineDeque)
-                    Output.setDot(currentLineHeight: view.relativeLineNum, previousLineHeight: view.relativeLineNum)
+                    view.viewRange.max = min(view.totalRange, self.rows)
                 }
-
+            }
+            else {
+                if !(view.viewRange.min == 1 && view.viewRange.max == view.totalRange) {
+                    view.viewRange.max = view.viewRange.min + self.rows - 1
+                } else {
+                    view.viewRange.max = min(view.totalRange, self.rows)
+                }
+                view.relativeLineNum = min(view.relativeLineNum, self.rows)
             }
 
-            Output.debugLine(view: view)
+            view.lineDeque.removeAll(keepingCapacity: true)
+            view.lineDeque.append(contentsOf: rootFile.getNodes(range: view.viewRange))
+
+            if showQueue {
+                let semaphore = DispatchSemaphore(value: 0)
+                Task {
+                    let queue = await audioPlayer.queue
+                    Output.fillQueue(lines: Deque<String>(queue.map{$0.name}))
+                    semaphore.signal()
+                }
+                semaphore.wait()
+            } else {
+                Output.fillTree(lines: view.lineDeque)
+                Output.setDot(currentLineHeight: view.relativeLineNum, previousLineHeight: view.relativeLineNum)
+            }
+
         }
+
+        Output.debugLine(view: view)
+
     }
 
     /// - Returns: The current size of the terminal in rows (height) and columns (width)
@@ -777,17 +785,16 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
                 player.setVolume(volume, fadeDuration: 0)
                 player.play()
 
-                await withCheckedContinuation { cont in
-                    continuation = cont
-                }
+                self.startTimer()
+
+                await withCheckedContinuation { cont in continuation = cont }
+
+                Output.progressBar(currentTime: nil, duration: nil)
 
                 if !skipTracking {
                     Database.shared.addHistory(file_hash: node.file_hash!)
                 }
-
                 skipTracking = false
-
-                currentPlayer = nil
 
             } catch {
                 Terminal.shared.resetTerminal(msg: error.localizedDescription)
@@ -808,7 +815,10 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
     func pause() {
         guard let player = currentPlayer else {return}
         if player.isPlaying { player.pause() }
-        else { player.play() }
+        else {
+            player.play() 
+            self.startTimer()
+        }
     }
 
     func skip() {
@@ -835,9 +845,7 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
         skip()
     }
 
-    func toggleLoop() {
-        looping = !looping
-    }
+    func toggleLoop() {looping = !looping}
 
     func volume(up: Bool) {
         guard let player = currentPlayer else {return}
@@ -848,6 +856,15 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
         player.setVolume(volume, fadeDuration: 0)
     }
 
+    private func startTimer() {
+        Task {
+            while let player = self.currentPlayer, player.isPlaying {
+                Output.progressBar(currentTime: player.currentTime, duration: player.duration)
+                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+            }
+        }
+    }
+
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { await self.playerDidFinish() }
     }
@@ -855,6 +872,7 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
     private func playerDidFinish() {
         continuation?.resume()
         continuation = nil
+        currentPlayer = nil
     }
 
 }
@@ -979,6 +997,45 @@ struct Output {
             separator: "",
             terminator: ""
         )
+        fflush(stdout)
+    }
+
+    static func progressBar(currentTime: TimeInterval?, duration: TimeInterval?) {
+        Terminal.shared.lastKnownCurrentTime = currentTime
+        Terminal.shared.lastKnownDuration = duration
+
+        if let currentTime = currentTime, let duration = duration {
+
+            func formatTime(_ t: TimeInterval) -> String {
+                let total = Int(t)
+                let minutes = total / 60
+                let seconds = total % 60
+                return String(format: "%02d:%02d", minutes, seconds)
+            }
+
+            var timeWidth: Int
+
+            let a = formatTime(currentTime)
+            let b = formatTime(duration)
+
+            timeWidth = a.count + b.count + 5
+
+            let barWidth: Int = Terminal.shared.columns + 2 - timeWidth
+            let progress : TimeInterval = currentTime / duration
+            let left     : Int = max(0,Int(floor(progress * Double(barWidth)))-1)
+            let right    : Int = barWidth - (left+1)
+
+            print(
+                "\u{001B}[\(Terminal.shared.rows+3);H\(String(repeating: "━", count: left))○\(String(repeating: "-", count: right)) \(a) / \(b)",
+                terminator: ""
+            )
+        }
+        else {
+            print(
+                "\u{001B}[\(Terminal.shared.rows+3);H\(String(repeating: " ", count: Terminal.shared.columns + 2))",
+                terminator: ""
+                )
+        }
         fflush(stdout)
     }
 

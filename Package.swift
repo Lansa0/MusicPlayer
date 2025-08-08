@@ -52,6 +52,11 @@ let package = Package(
         .executableTarget(
             name: "scratch",
             path: "Tests/scratchpad"
+        ),
+
+        .executableTarget(
+            name: "time",
+            path: "Tests/time_bar"
         )
 
     ]
