@@ -1,4 +1,4 @@
-// v1.9.10
+// v1.9.11
 
 import AVFoundation
 import Collections
@@ -8,29 +8,15 @@ import CryptoKit
 
 let BORDER_OFFSET     : Int = 1
 
-let MINIMUM_ROWS      : Int = 5
-let MINIMUM_CLOUMNS   : Int = 30
-
-let DOWN_ARROW        : String = "\u{001B}[32m▾\u{001B}[0m"
-let RIGHT_ARROW       : String = "▸"
-
-let FILE_NAME_OFFSET  : Int = 5
-let QUEUE_NAME_OFFSET : Int = 3
-
-let FILE_HEADER       : String = "FILE━TREE"
-let QUEUE_HEADER      : String = "QUEUE━━━━"
-
-let FILES_PATH        : String = ".config/Lansa0MusicPlayer/files.json"
-let CONFIG_PATH       : String = ".config/Lansa0MusicPlayer/config.json"
+let FILES_PATH  : String = ".config/Lansa0MusicPlayer/files.json"
+let CONFIG_PATH : String = ".config/Lansa0MusicPlayer/config.json"
 
 /* TODO
     Add (better) docs for functions
     Work on error handling (might be good enough)
     Argument help messages
     Now Playing widget (??)
-    Flatten tree array
-
-    Assign Magic numbers to actual variables
+    Flatten tree array ?
 */
 
 ///////////////////////////////////////////////////////////////////////////
@@ -101,10 +87,15 @@ struct Arguments : ParsableCommand {
 class Terminal {
     nonisolated(unsafe) static let shared = Terminal()
 
+    private let MINIMUM_ROWS    : Int = 5
+    private let MINIMUM_COLUMNS : Int = 30
+
+    private let ROW_ADJUSTMENT    : Int = 3 // 2 Borders + 1 Progress bar
+    private let COLUMN_ADJUSTMENT : Int = 2 // 2 Borders
+
     private var OriginalTerm = termios()
 
-    var debug: Bool = false
-
+    var debug     : Bool = false
     var tooSmall  : Bool = false
     var showQueue : Bool = false
 
@@ -135,12 +126,12 @@ class Terminal {
 
         guard let (rows,columns) = getTerminalSize() else {return}
 
-        self.rows = rows - 3 - (self.debug ? 1 : 0)
-        self.columns = columns - 2
+        self.rows = rows - ROW_ADJUSTMENT - (self.debug ? 1 : 0)
+        self.columns = columns - COLUMN_ADJUSTMENT
 
         view.viewRange = (1, min(self.rows, view.totalRange))
 
-        if rows < MINIMUM_ROWS || columns < MINIMUM_CLOUMNS {
+        if rows < MINIMUM_ROWS || columns < MINIMUM_COLUMNS {
             self.tooSmall = true
             Output.tooSmall()
         } else {
@@ -176,17 +167,17 @@ class Terminal {
     func onResize(view: inout View, rootNode: Node, audioPlayer: AudioPlayer) {
         guard let (rows, columns) = getTerminalSize() else {return}
 
-        if rows < MINIMUM_ROWS || columns < MINIMUM_CLOUMNS {
+        if rows < MINIMUM_ROWS || columns < MINIMUM_COLUMNS {
             self.tooSmall = true
             Output.tooSmall()
-        } 
+        }
         else {
 
-            let expanding: Bool = self.rows < (rows - 3)
+            let expanding: Bool = self.rows < (rows - ROW_ADJUSTMENT)
 
             self.tooSmall = false
-            self.rows = rows - 3 - (self.debug ? 1 : 0)
-            self.columns = columns - 2
+            self.rows = rows - ROW_ADJUSTMENT - (self.debug ? 1 : 0)
+            self.columns = columns - COLUMN_ADJUSTMENT
 
             Output.drawBorder(rows: self.rows, columns: self.columns)
             Output.progressBar(currentTime: self.lastKnownCurrentTime, duration: self.lastKnownDuration)
@@ -503,6 +494,9 @@ class Node: @unchecked Sendable, Codable {
     }
 
     private func createString(_ depth: Int, _ numChildren: Int) -> String {
+        let DOWN_ARROW  : String = "\u{001B}[32m▾\u{001B}[0m"
+        let RIGHT_ARROW : String = "▸"
+
         var str: String = String(repeating: "  ", count: depth)
 
         if self.nodes.count > 0 {
@@ -749,25 +743,27 @@ struct FileHandler {
 ///////////////////////////////////////////////////////////////////////////
 
 actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
+    private let VOLUME_INCREMENT : Float = 0.05
+
     private var continuation: CheckedContinuation<Void, Never>?
     private(set) var queue = Deque<Node>()
     private var playing = false
     private var currentPlayer: AVAudioPlayer?
     private var volume: Float = 0.5
     private var skipTracking: Bool = false
-    var looping: Bool = false
+    private var looping: Bool = false
 
     func add(contentsOf nodes: [Node]) {
-        queue.append(contentsOf: nodes)
+        self.queue.append(contentsOf: nodes)
 
-        if !playing {
-            playing = true
+        if !self.playing {
+            self.playing = true
             Task { await play() }
         }
     }
 
     private func play() async {
-        while let node = queue.first {
+        while let node = self.queue.first {
 
             // ━━━━◉━━━━
             // ━━━━○━━━━
@@ -781,39 +777,39 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
                 let player = try AVAudioPlayer(contentsOf: node.url!)
                 player.delegate = self
 
-                currentPlayer = player
+                self.currentPlayer = player
                 player.setVolume(volume, fadeDuration: 0)
                 player.play()
 
                 self.startTimer()
 
-                await withCheckedContinuation { cont in continuation = cont }
+                await withCheckedContinuation { cont in self.continuation = cont }
 
                 Output.progressBar(currentTime: nil, duration: nil)
 
-                if !skipTracking {
+                if !self.skipTracking {
                     Database.shared.addHistory(file_hash: node.file_hash!)
                 }
-                skipTracking = false
+                self.skipTracking = false
 
             } catch {
                 Terminal.shared.resetTerminal(msg: error.localizedDescription)
             }
 
-            if !looping {
-                _ = queue.popFirst()
+            if !self.looping {
+                _ = self.queue.popFirst()
             }
 
         }
 
         if Terminal.shared.showQueue {
-            Output.fillQueue(lines: Deque<String>(queue.map{$0.name}))
+            Output.fillQueue(lines: Deque<String>(self.queue.map{$0.name}))
         }
         playing = false
     }
 
     func pause() {
-        guard let player = currentPlayer else {return}
+        guard let player = self.currentPlayer else {return}
         if player.isPlaying { player.pause() }
         else {
             player.play() 
@@ -822,38 +818,38 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
     }
 
     func skip() {
-        guard let player = currentPlayer else {return}
+        guard let player = self.currentPlayer else {return}
 
         if player.currentTime > (player.duration / 2) {
-            skipTracking = false
+            self.skipTracking = false
         } else {
-            skipTracking = true
+            self.skipTracking = true
         }
 
-        looping = false
+        self.looping = false
 
         player.stop()
         self.playerDidFinish()
     }
 
     func clearQueue() {
-        queue.removeAll(keepingCapacity: true)
+        self.queue.removeAll(keepingCapacity: true)
         if Terminal.shared.showQueue {
-            Output.fillQueue(lines: Deque<String>(queue.map{$0.name}))
+            Output.fillQueue(lines: Deque<String>(self.queue.map{$0.name}))
         }
 
         skip()
     }
 
-    func toggleLoop() {looping = !looping}
+    func toggleLoop() {self.looping = !self.looping}
 
     func volume(up: Bool) {
-        guard let player = currentPlayer else {return}
+        guard let player = self.currentPlayer else {return}
 
-        if up {volume = min(1.0, volume + 0.05)}
-        else  {volume = max(0.0, volume - 0.05)}
+        if up {self.volume = min(1.0, self.volume + self.VOLUME_INCREMENT)}
+        else  {self.volume = max(0.0, self.volume - self.VOLUME_INCREMENT)}
 
-        player.setVolume(volume, fadeDuration: 0)
+        player.setVolume(self.volume, fadeDuration: 0)
     }
 
     private func startTimer() {
@@ -870,9 +866,9 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
     }
 
     private func playerDidFinish() {
-        continuation?.resume()
-        continuation = nil
-        currentPlayer = nil
+        self.continuation?.resume()
+        self.continuation = nil
+        self.currentPlayer = nil
     }
 
 }
@@ -882,6 +878,11 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
 ///////////////////////////////////////////////////////////////////////////
 
 struct Output {
+    private static let FILE_HEADER  : String = "FILE━TREE"
+    private static let QUEUE_HEADER : String = "QUEUE━━━━"
+
+    private static let FILE_NAME_OFFSET  : Int = 5
+    private static let QUEUE_NAME_OFFSET : Int = 3
 
     static func userManual() {
         print("""
@@ -925,6 +926,7 @@ struct Output {
 
     // Trust me, this works
     static func drawBorder(rows: Int, columns: Int) {
+        // -10 is the length of FILE_HEADER / QUEUE_HEADER plus the border
         print("\u{001B}[2J\u{001B}[H┏\(Terminal.shared.showQueue ? QUEUE_HEADER : FILE_HEADER)━\(String(repeating: "━", count: columns-10))┓")
         for _ in 0..<rows {print("┃\(String(repeating: " ", count: columns))┃")}
         print("┗\(String(repeating: "━", count: columns))┛",terminator: "")
@@ -966,7 +968,7 @@ struct Output {
             } else if rowNum < lines.count {
                 print(
                     emptyCursorPos,emptyLine,
-                    lineCursorPos,lines[rowNum].prefix(Terminal.shared.columns - 1),
+                    lineCursorPos,lines[rowNum].prefix(Terminal.shared.columns - BORDER_OFFSET),
                     separator: ""
                 )
             } else {
@@ -985,7 +987,6 @@ struct Output {
 
     static func debugLine(view: View) {
         if !Terminal.shared.debug {return}
-        // if !DEBUG {return}
         let rows: Int = Terminal.shared.rows
         let columns: Int = Terminal.shared.columns
 
@@ -1018,6 +1019,7 @@ struct Output {
             let a = formatTime(currentTime)
             let b = formatTime(duration)
 
+            // +5 refer to Tests/time_bar/main.swift
             timeWidth = a.count + b.count + 5
 
             let barWidth: Int = Terminal.shared.columns + 2 - timeWidth
