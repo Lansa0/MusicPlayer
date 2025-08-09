@@ -1,12 +1,10 @@
-// v1.9.11
+// v1.9.12
 
 import AVFoundation
 import Collections
 import ArgumentParser
 import SQLite
 import CryptoKit
-
-let BORDER_OFFSET     : Int = 1
 
 let FILES_PATH  : String = ".config/Lansa0MusicPlayer/files.json"
 let CONFIG_PATH : String = ".config/Lansa0MusicPlayer/config.json"
@@ -17,6 +15,8 @@ let CONFIG_PATH : String = ".config/Lansa0MusicPlayer/config.json"
     Argument help messages
     Now Playing widget (??)
     Flatten tree array ?
+
+    Rework path argument
 */
 
 ///////////////////////////////////////////////////////////////////////////
@@ -213,7 +213,8 @@ class Terminal {
                 let semaphore = DispatchSemaphore(value: 0)
                 Task {
                     let queue = await audioPlayer.queue
-                    Output.fillQueue(lines: Deque<String>(queue.map{$0.name}))
+                    let looping = await audioPlayer.looping
+                    Output.fillQueue(lines: Deque<String>(queue.map{$0.name}), looping: looping)
                     semaphore.signal()
                 }
                 semaphore.wait()
@@ -751,7 +752,7 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
     private var currentPlayer: AVAudioPlayer?
     private var volume: Float = 0.5
     private var skipTracking: Bool = false
-    private var looping: Bool = false
+    private(set) var looping: Bool = false
 
     func add(contentsOf nodes: [Node]) {
         self.queue.append(contentsOf: nodes)
@@ -770,7 +771,7 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
             // ━━━━●━━━━
 
             if Terminal.shared.showQueue {
-                Output.fillQueue(lines: Deque<String>(queue.map{$0.name}))
+                Output.fillQueue(lines: Deque<String>(queue.map{$0.name}), looping: looping)
             }
 
             do {
@@ -803,7 +804,7 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
         }
 
         if Terminal.shared.showQueue {
-            Output.fillQueue(lines: Deque<String>(self.queue.map{$0.name}))
+            Output.fillQueue(lines: Deque<String>(self.queue.map{$0.name}), looping: looping)
         }
         playing = false
     }
@@ -812,7 +813,7 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
         guard let player = self.currentPlayer else {return}
         if player.isPlaying { player.pause() }
         else {
-            player.play() 
+            player.play()
             self.startTimer()
         }
     }
@@ -835,13 +836,21 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
     func clearQueue() {
         self.queue.removeAll(keepingCapacity: true)
         if Terminal.shared.showQueue {
-            Output.fillQueue(lines: Deque<String>(self.queue.map{$0.name}))
+            Output.fillQueue(lines: Deque<String>(self.queue.map{$0.name}), looping: looping)
         }
 
-        skip()
+        self.skip()
     }
 
-    func toggleLoop() {self.looping = !self.looping}
+    func toggleLoop() {
+        self.looping = !self.looping
+
+        if Terminal.shared.showQueue {
+            // I could just make a new function that will only rewrite the very top line instead of the entire queue but nah
+            Output.fillQueue(lines: Deque<String>(self.queue.map{$0.name}), looping: looping)
+        }
+
+    }
 
     func volume(up: Bool) {
         guard let player = self.currentPlayer else {return}
@@ -878,6 +887,8 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
 ///////////////////////////////////////////////////////////////////////////
 
 struct Output {
+    private static let BORDER_OFFSET : Int = 1
+
     private static let FILE_HEADER  : String = "FILE━TREE"
     private static let QUEUE_HEADER : String = "QUEUE━━━━"
 
@@ -952,7 +963,7 @@ struct Output {
         }
     }
 
-    static func fillQueue(lines: Deque<String>) {
+    static func fillQueue(lines: Deque<String>, looping: Bool) {
         let emptyLine = (String(repeating: " ", count: Terminal.shared.columns))
         for rowNum in 0..<Terminal.shared.rows {
             // Need the extra +1 because rowNum starts at 0
@@ -960,12 +971,16 @@ struct Output {
             let lineCursorPos = "\u{001B}[\(rowNum + BORDER_OFFSET + 1);\(QUEUE_NAME_OFFSET)H"
 
             if rowNum == 0 && lines.count > 0 {
+                let status  : String = looping ? "🎵 🔁 " : "🎵 "
+                let spacing : Int = looping ? 7 : 4
+
                 print(
                     emptyCursorPos, emptyLine,
-                    lineCursorPos, "🎵 ", lines[rowNum].prefix(Terminal.shared.columns - 4), // 4 b/c emojis are weird sizes
+                    lineCursorPos, status, lines[rowNum].prefix(Terminal.shared.columns - spacing),
                     separator: ""
                 )
-            } else if rowNum < lines.count {
+            }
+            else if rowNum < lines.count {
                 print(
                     emptyCursorPos,emptyLine,
                     lineCursorPos,lines[rowNum].prefix(Terminal.shared.columns - BORDER_OFFSET),
@@ -1231,8 +1246,8 @@ struct Input {
     static func pauseTrack(audioPlayer: AudioPlayer) {Task {await audioPlayer.pause()}}
     static func skipTrack(audioPlayer: AudioPlayer)  {Task {await audioPlayer.skip()}}
     static func clearQueue(audioPlayer: AudioPlayer) {Task {await audioPlayer.clearQueue()}}
-    static func changeVolume(audioPlayer : AudioPlayer, volumeUp: Bool) {Task {await audioPlayer.volume(up: volumeUp)}}
-    static func toggleLoop(audioPlayer : AudioPlayer) {Task { await audioPlayer.toggleLoop()}}
+    static func changeVolume(audioPlayer: AudioPlayer, volumeUp: Bool) {Task {await audioPlayer.volume(up: volumeUp)}}
+    static func toggleLoop(audioPlayer: AudioPlayer) {Task { await audioPlayer.toggleLoop()}}
 
     static func switchView(view: View, audioPlayer: AudioPlayer) {
         Terminal.shared.showQueue = !Terminal.shared.showQueue
@@ -1242,7 +1257,8 @@ struct Input {
             let semaphore = DispatchSemaphore(value: 0)
             Task {
                 let queue = await audioPlayer.queue
-                Output.fillQueue(lines: Deque<String>(queue.map{$0.name}))
+                let looping = await audioPlayer.looping
+                Output.fillQueue(lines: Deque<String>(queue.map{$0.name}), looping: looping)
                 semaphore.signal()
             }
             semaphore.wait()
