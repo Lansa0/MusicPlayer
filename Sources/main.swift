@@ -1,4 +1,4 @@
-// v1.9.14
+// v1.9.15
 
 import AVFoundation
 import Collections
@@ -16,7 +16,7 @@ let CONFIG_PATH : String = ".config/Lansa0MusicPlayer/config.json"
     Now Playing widget (??)
     Flatten tree array ?
 
-    Rework path argument
+    Rework path argument ?
 */
 
 ///////////////////////////////////////////////////////////////////////////
@@ -1107,7 +1107,9 @@ enum Keys {
         }
 
         guard let cb = UInt8(cb) else {return nil}
-        return cb == 64 ? Keys.up : Keys.down
+        if cb == 64 {return Keys.up}
+        else if cb == 65 {return Keys.down}
+        else {return nil}
     }
 
 }
@@ -1314,7 +1316,9 @@ input.setEventHandler {
     }
     // arrow key input
     else if n == 3 && buff.starts(with: [27, 91]) {
-        key = (buff[2] == 65) ? Keys.up : Keys.down
+        if buff[2] == 65 {key = Keys.up}
+        else if buff[2] == 66 {key = Keys.down}
+        else {return}
     }
     // normal key input
     else {
