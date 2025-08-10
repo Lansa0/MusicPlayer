@@ -1,4 +1,4 @@
-// v1.9.12
+// v1.9.13
 
 import AVFoundation
 import Collections
@@ -766,10 +766,6 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
     private func play() async {
         while let node = self.queue.first {
 
-            // ━━━━◉━━━━
-            // ━━━━○━━━━
-            // ━━━━●━━━━
-
             if Terminal.shared.showQueue {
                 Output.fillQueue(lines: Deque<String>(queue.map{$0.name}), looping: looping)
             }
@@ -1069,7 +1065,8 @@ enum Keys {
     case p
     case k
     case j
-    case btick
+    case btick // `
+    case tilde // ~
     case V
     case down
     case up
@@ -1086,6 +1083,7 @@ enum Keys {
         107 : .up,
         106 : .down,
         96  : .btick,
+        126 : .tilde,
         86  : .V,
         32  : .space,
         10  : .enter,
@@ -1330,13 +1328,14 @@ input.setEventHandler {
         case .down  : if !showQueue {Input.scrollDown(view: &filesView, rootFile: rootFile)}
         case .space : if !showQueue {Input.expandFolder(view: &filesView, rootFile: rootFile)}
         case .enter : if !showQueue {Input.playFiles(view: &filesView,  rootFile: rootFile, audioPlayer: audioPlayer)}
+        case .btick,
+             .tilde : Input.switchView(view: filesView, audioPlayer: audioPlayer)
         case .p     : Input.pauseTrack(audioPlayer: audioPlayer)
         case .s     : Input.skipTrack(audioPlayer: audioPlayer)
         case .c     : Input.clearQueue(audioPlayer: audioPlayer)
         case .V     : Input.changeVolume(audioPlayer: audioPlayer, volumeUp: true)
         case .v     : Input.changeVolume(audioPlayer: audioPlayer, volumeUp: false)
         case .l     : Input.toggleLoop(audioPlayer: audioPlayer)
-        case .btick : Input.switchView(view: filesView, audioPlayer: audioPlayer)
         case .q     : Input.quit(input: input, Exit: &Exit)
 
         default: break
