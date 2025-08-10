@@ -1,4 +1,4 @@
-// v1.9.13
+// v1.9.14
 
 import AVFoundation
 import Collections
@@ -1033,13 +1033,14 @@ struct Output {
             // +5 refer to Tests/time_bar/main.swift
             timeWidth = a.count + b.count + 5
 
-            let barWidth: Int = Terminal.shared.columns + 2 - timeWidth
+            // 1 beacuse it looks better when you add 1 :p
+            let barWidth: Int = Terminal.shared.columns + 1 - timeWidth
             let progress : TimeInterval = currentTime / duration
             let left     : Int = max(0,Int(floor(progress * Double(barWidth)))-1)
             let right    : Int = barWidth - (left+1)
 
             print(
-                "\u{001B}[\(Terminal.shared.rows+3);H\(String(repeating: "━", count: left))○\(String(repeating: "-", count: right)) \(a) / \(b)",
+                "\u{001B}[\(Terminal.shared.rows+3);H \(String(repeating: "━", count: left))○\(String(repeating: "-", count: right)) \(a) / \(b)",
                 terminator: ""
             )
         }
