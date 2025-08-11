@@ -1,4 +1,4 @@
-// v1.9.15
+// v1.9.16
 
 import AVFoundation
 import Collections
@@ -13,8 +13,6 @@ let CONFIG_PATH : String = ".config/Lansa0MusicPlayer/config.json"
     Add (better) docs for functions
     Work on error handling (might be good enough)
     Argument help messages
-    Now Playing widget (??)
-    Flatten tree array ?
 
     Rework path argument ?
 */
@@ -933,34 +931,43 @@ struct Output {
 
     // Trust me, this works
     static func drawBorder(rows: Int, columns: Int) {
+        var output: String = ""
+
         // -10 is the length of FILE_HEADER / QUEUE_HEADER plus the border
-        print("\u{001B}[2J\u{001B}[H┏\(Terminal.shared.showQueue ? QUEUE_HEADER : FILE_HEADER)━\(String(repeating: "━", count: columns-10))┓")
-        for _ in 0..<rows {print("┃\(String(repeating: " ", count: columns))┃")}
-        print("┗\(String(repeating: "━", count: columns))┛",terminator: "")
+        output += "\u{001B}[2J\u{001B}[H┏\(Terminal.shared.showQueue ? QUEUE_HEADER : FILE_HEADER)━\(String(repeating: "━", count: columns-10))┓\n"
+        for _ in 0..<rows {output += "┃\(String(repeating: " ", count: columns))┃\n"}
+        output += "┗\(String(repeating: "━", count: columns))┛"
+
+        print(output,terminator: "")
         fflush(stdout)
     }
 
     static func fillTree(lines: Deque<String>) {
-        let emptyLine = (String(repeating: " ", count: Terminal.shared.columns))
+        let emptyLine: String = String(repeating: " ", count: Terminal.shared.columns)
+
+        var output: String = ""
+
         for rowNum in 0..<Terminal.shared.rows {
             // Need the extra +1 because rowNum starts at 0
-            let emptyCursorPos = "\u{001B}[\(rowNum + BORDER_OFFSET + 1);2H"
-            let lineCursorPos = "\u{001B}[\(rowNum + BORDER_OFFSET + 1);\(FILE_NAME_OFFSET)H"
+            let emptyCursorPos : String = "\u{001B}[\(rowNum + BORDER_OFFSET + 1);2H"
+            let lineCursorPos  : String = "\u{001B}[\(rowNum + BORDER_OFFSET + 1);\(FILE_NAME_OFFSET)H"
 
             if rowNum < lines.count {
-                print(
-                    emptyCursorPos,emptyLine,
-                    lineCursorPos,lines[rowNum].prefix(Terminal.shared.columns - 3), // 3 is the indent between border and string
-                    separator: ""
-                )
-            } else {
-                print(emptyCursorPos,emptyLine,separator: "")
+                output += "\(emptyCursorPos)\(emptyLine)\(lineCursorPos)\(lines[rowNum].prefix(Terminal.shared.columns - 3))\n"
+            }
+            else {
+                output += "\(emptyCursorPos)\(emptyLine)\n"
             }
         }
+
+        print(output)
     }
 
     static func fillQueue(lines: Deque<String>, looping: Bool) {
-        let emptyLine = (String(repeating: " ", count: Terminal.shared.columns))
+        let emptyLine: String = (String(repeating: " ", count: Terminal.shared.columns))
+
+        var output: String = ""
+
         for rowNum in 0..<Terminal.shared.rows {
             // Need the extra +1 because rowNum starts at 0
             let emptyCursorPos = "\u{001B}[\(rowNum + BORDER_OFFSET + 1);2H"
@@ -970,23 +977,16 @@ struct Output {
                 let status  : String = looping ? "🎵 🔁 " : "🎵 "
                 let spacing : Int = looping ? 7 : 4
 
-                print(
-                    emptyCursorPos, emptyLine,
-                    lineCursorPos, status, lines[rowNum].prefix(Terminal.shared.columns - spacing),
-                    separator: ""
-                )
+                output += "\(emptyCursorPos)\(emptyLine)\(lineCursorPos)\(status)\(lines[rowNum].prefix(Terminal.shared.columns - spacing))\n"
             }
             else if rowNum < lines.count {
-                print(
-                    emptyCursorPos,emptyLine,
-                    lineCursorPos,lines[rowNum].prefix(Terminal.shared.columns - BORDER_OFFSET),
-                    separator: ""
-                )
+                output += "\(emptyCursorPos)\(emptyLine)\(lineCursorPos)\(lines[rowNum].prefix(Terminal.shared.columns - BORDER_OFFSET))\n"
             } else {
-                print(emptyCursorPos,emptyLine,separator: "")
+                output += "\(emptyCursorPos)\(emptyLine)\n"
             }
-
         }
+
+        print(output)
     }
 
     static func setDot(currentLineHeight: Int, previousLineHeight: Int) {
