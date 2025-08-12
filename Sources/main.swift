@@ -1,4 +1,4 @@
-// v1.9.16
+// v1.10.17
 
 import AVFoundation
 import Collections
@@ -11,10 +11,9 @@ let CONFIG_PATH : String = ".config/Lansa0MusicPlayer/config.json"
 
 /* TODO
     Add (better) docs for functions
-    Work on error handling (might be good enough)
+    Work on error handling (might be good enough) (wasn't good enough)
     Argument help messages
 
-    Rework path argument ?
 */
 
 ///////////////////////////////////////////////////////////////////////////
@@ -65,7 +64,7 @@ struct Arguments : ParsableCommand {
                 Arguments.exit(withError: error)
             }
 
-            Arguments.exit()
+            if !self.scan {Arguments.exit()}
         }
 
         else if manual {
@@ -743,6 +742,7 @@ struct FileHandler {
 
 actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
     private let VOLUME_INCREMENT : Float = 0.05
+    private let SEEK_INCREMENT   : TimeInterval = 10
 
     private var continuation: CheckedContinuation<Void, Never>?
     private(set) var queue = Deque<Node>()
@@ -861,6 +861,17 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
                 Output.progressBar(currentTime: player.currentTime, duration: player.duration)
                 try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
             }
+        }
+    }
+
+    func seek(forward: Bool) {
+        guard let player = self.currentPlayer else {return}
+
+        if forward {
+            player.currentTime = min(player.duration, player.currentTime + SEEK_INCREMENT)
+        }
+        else {
+            player.currentTime = max(0, player.currentTime - SEEK_INCREMENT)
         }
     }
 
@@ -1060,40 +1071,48 @@ struct Output {
 ///////////////////////////////////////////////////////////////////////////
 
 enum Keys {
-    case v
-    case s
-    case q
-    case p
-    case k
-    case j
-    case btick // `
-    case tilde // ~
-    case V
-    case down
-    case up
-    case space
-    case enter
-    case c
-    case l
+
+    case clearQueue
+    case expandFolder
+    case loop
+    case pause
+    case play
+    case quit
+    case scrollDown
+    case scrollUp
+    case seekBackward
+    case seekForward
+    case skip
+    case switchView
+    case volumeDown
+    case volumeUp
 
     private static let KeyCodes: [UInt8 : Keys] = [
-        118 : .v,
-        115 : .s,
-        113 : .q,
-        112 : .p,
-        107 : .up,
-        106 : .down,
-        96  : .btick,
-        126 : .tilde,
-        86  : .V,
-        32  : .space,
-        10  : .enter,
-        99  : .c,
-        108 : .l
+        99  : .clearQueue,      // c
+        32  : .expandFolder,    // space
+        108 : .loop,            // l
+        112 : .pause,           // p
+        10  : .play,            // enter
+        113 : .quit,            // q
+        106 : .scrollDown,      // j
+        107 : .scrollUp,        // k
+        115 : .skip,            // s
+        96  : .switchView,      // btick (`)
+        126 : .switchView,      // tilde (~)
+        86  : .volumeUp,        // Uppercase V
+        118 : .volumeDown,      // Lowecase v
     ]
 
     static func getKeyboardInput(c: UInt8) -> Keys? {
         return KeyCodes[c]
+    }
+
+    static func getArrowInput(c: UInt8) -> Keys? {
+        if c == 65 {return Keys.scrollUp}
+        else if c == 66 {return Keys.scrollDown}
+        else if c == 67 {return Keys.seekForward}
+        else if c == 68 {return Keys.seekBackward}
+        return nil
     }
 
     static func getScrollInput(buffer: [UInt8]) -> Keys? {
@@ -1107,8 +1126,8 @@ enum Keys {
         }
 
         guard let cb = UInt8(cb) else {return nil}
-        if cb == 64 {return Keys.up}
-        else if cb == 65 {return Keys.down}
+        if cb == 64 {return Keys.scrollUp}
+        else if cb == 65 {return Keys.scrollDown}
         else {return nil}
     }
 
@@ -1248,7 +1267,8 @@ struct Input {
     static func skipTrack(audioPlayer: AudioPlayer)  {Task {await audioPlayer.skip()}}
     static func clearQueue(audioPlayer: AudioPlayer) {Task {await audioPlayer.clearQueue()}}
     static func changeVolume(audioPlayer: AudioPlayer, volumeUp: Bool) {Task {await audioPlayer.volume(up: volumeUp)}}
-    static func toggleLoop(audioPlayer: AudioPlayer) {Task { await audioPlayer.toggleLoop()}}
+    static func toggleLoop(audioPlayer: AudioPlayer) {Task {await audioPlayer.toggleLoop()}}
+    static func seek(audioPlayer: AudioPlayer, forward: Bool) {Task {await audioPlayer.seek(forward: forward)}}
 
     static func switchView(view: View, audioPlayer: AudioPlayer) {
         Terminal.shared.showQueue = !Terminal.shared.showQueue
@@ -1309,18 +1329,14 @@ input.setEventHandler {
     // invalid
     if n < 1 || Terminal.shared.tooSmall { return }
 
-    // scroll input
     else if buff.starts(with: [0x1B, 0x5B, 0x3C]) && !args.scrollOff {
         guard let _key = Keys.getScrollInput(buffer: buff) else {return}
         key = _key
     }
-    // arrow key input
     else if n == 3 && buff.starts(with: [27, 91]) {
-        if buff[2] == 65 {key = Keys.up}
-        else if buff[2] == 66 {key = Keys.down}
-        else {return}
+        guard let _key = Keys.getArrowInput(c: buff[2]) else {return}
+        key = _key
     }
-    // normal key input
     else {
         guard let _key = Keys.getKeyboardInput(c: buff[0]) else {return}
         key = _key
@@ -1329,21 +1345,20 @@ input.setEventHandler {
     let showQueue: Bool = Terminal.shared.showQueue
 
     switch key {
-        case .up    : if !showQueue {Input.scrollUp(view: &filesView, rootFile: rootFile)}
-        case .down  : if !showQueue {Input.scrollDown(view: &filesView, rootFile: rootFile)}
-        case .space : if !showQueue {Input.expandFolder(view: &filesView, rootFile: rootFile)}
-        case .enter : if !showQueue {Input.playFiles(view: &filesView,  rootFile: rootFile, audioPlayer: audioPlayer)}
-        case .btick,
-             .tilde : Input.switchView(view: filesView, audioPlayer: audioPlayer)
-        case .p     : Input.pauseTrack(audioPlayer: audioPlayer)
-        case .s     : Input.skipTrack(audioPlayer: audioPlayer)
-        case .c     : Input.clearQueue(audioPlayer: audioPlayer)
-        case .V     : Input.changeVolume(audioPlayer: audioPlayer, volumeUp: true)
-        case .v     : Input.changeVolume(audioPlayer: audioPlayer, volumeUp: false)
-        case .l     : Input.toggleLoop(audioPlayer: audioPlayer)
-        case .q     : Input.quit(input: input, Exit: &Exit)
-
-        default: break
+        case .expandFolder  : if !showQueue { Input.expandFolder(view: &filesView, rootFile: rootFile) }
+        case .play          : if !showQueue { Input.playFiles(view: &filesView, rootFile: rootFile, audioPlayer: audioPlayer) }
+        case .scrollDown    : if !showQueue { Input.scrollDown(view: &filesView, rootFile: rootFile) }
+        case .scrollUp      : if !showQueue { Input.scrollUp(view: &filesView, rootFile: rootFile) }
+        case .clearQueue    : Input.clearQueue(audioPlayer: audioPlayer)
+        case .loop          : Input.toggleLoop(audioPlayer: audioPlayer)
+        case .pause         : Input.pauseTrack(audioPlayer: audioPlayer)
+        case .quit          : Input.quit(input: input, Exit: &Exit)
+        case .seekBackward  : Input.seek(audioPlayer: audioPlayer, forward: false)
+        case .seekForward   : Input.seek(audioPlayer: audioPlayer, forward: true)
+        case .skip          : Input.skipTrack(audioPlayer: audioPlayer)
+        case .switchView    : Input.switchView(view: filesView, audioPlayer: audioPlayer)
+        case .volumeDown    : Input.changeVolume(audioPlayer: audioPlayer, volumeUp: false)
+        case .volumeUp      : Input.changeVolume(audioPlayer: audioPlayer, volumeUp: true)
     }
 
 }
