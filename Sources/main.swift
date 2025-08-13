@@ -1,4 +1,7 @@
-// v1.10.17
+// v1.11.19
+// Added shuffle function
+// Reworked fillQueue function
+// Fixed debug line to work with progress bar
 
 import AVFoundation
 import Collections
@@ -13,7 +16,6 @@ let CONFIG_PATH : String = ".config/Lansa0MusicPlayer/config.json"
     Add (better) docs for functions
     Work on error handling (might be good enough) (wasn't good enough)
     Argument help messages
-
 */
 
 ///////////////////////////////////////////////////////////////////////////
@@ -211,7 +213,7 @@ class Terminal {
                 Task {
                     let queue = await audioPlayer.queue
                     let looping = await audioPlayer.looping
-                    Output.fillQueue(lines: Deque<String>(queue.map{$0.name}), looping: looping)
+                    Output.fillQueue(queue: queue, looping: looping)
                     semaphore.signal()
                 }
                 semaphore.wait()
@@ -764,9 +766,7 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
     private func play() async {
         while let node = self.queue.first {
 
-            if Terminal.shared.showQueue {
-                Output.fillQueue(lines: Deque<String>(queue.map{$0.name}), looping: looping)
-            }
+            Output.fillQueue(queue: self.queue, looping: looping)
 
             do {
                 let player = try AVAudioPlayer(contentsOf: node.url!)
@@ -797,9 +797,8 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
 
         }
 
-        if Terminal.shared.showQueue {
-            Output.fillQueue(lines: Deque<String>(self.queue.map{$0.name}), looping: looping)
-        }
+        Output.fillQueue(queue: self.queue, looping: looping)
+
         playing = false
     }
 
@@ -829,21 +828,15 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
 
     func clearQueue() {
         self.queue.removeAll(keepingCapacity: true)
-        if Terminal.shared.showQueue {
-            Output.fillQueue(lines: Deque<String>(self.queue.map{$0.name}), looping: looping)
-        }
-
+        Output.fillQueue(queue: [], looping: looping)
         self.skip()
     }
 
     func toggleLoop() {
         self.looping = !self.looping
 
-        if Terminal.shared.showQueue {
-            // I could just make a new function that will only rewrite the very top line instead of the entire queue but nah
-            Output.fillQueue(lines: Deque<String>(self.queue.map{$0.name}), looping: looping)
-        }
-
+        // I could just make a new function that will only rewrite the very top line instead of the entire queue but nah
+        Output.fillQueue(queue: self.queue, looping: looping)
     }
 
     func volume(up: Bool) {
@@ -875,6 +868,18 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
         }
     }
 
+    func shuffle() {
+        if self.queue.count < 2 {return}
+
+        var tail = Deque(self.queue.dropFirst())
+        tail.shuffle()
+        tail.prepend(self.queue.first!)
+
+        self.queue = tail
+
+        Output.fillQueue(queue: self.queue, looping: self.looping)
+    }
+
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { await self.playerDidFinish() }
     }
@@ -904,38 +909,80 @@ struct Output {
         print("""
         -- Setup --
 
-            If this is your first time using, run the --path argument
-            and set it to the path to the folder with your music downloads
+            If this is your first time, run the --path argument
+            and set it to the absolute path to the folder with your
+            music downloads
 
-            Then run the --scan argument to scan the files inside the set
-            folder. This will automatically take you to the player once
-            scanning is finished
+            Follow up --path with the --scan argument to scan the files
+            inside the set folder. This will automatically take you to
+            the player once scanning is finished
 
         -- Tracking --
 
-            W.I.P
+            > Basics
 
-        -- Navigation --
+                Everytime a track is finished playing, it will be tracked and
+                stored in a database found in
+                '/Library/Application Support/Lansa0MusicPlayer/history.sqlite3'
 
-            j | Down Arrow | Down Scroll : Scroll down
-            k | Up Arrow | Up Scroll : Scroll up
-            Space : Expand/Collapse folder
-            Enter : Add track to queue
-                    If used on a folder, add all tracks under the folder
-                    Automatically expands folder
-            ` (backtick) : Switches view between queue and file tree
+                Skipping a track that has played through at least half of its
+                duration will also stored
 
-        -- Playback --
+            > Database
 
-            p : Pause player
-            s : Skip current track
-            c : Clear queue
-            v (lowercase) : Volume down
-            V (uppercase) : Volume up
+                The database contains 2 tables, files and history
 
-        -- Misc --
+                The files table consists of all scanned tracks and contains
+                data such as artist, album, and track name, as well as a file hash*
+                (It is advised to not delete any entries in this table even if you
+                no longer have that track on your machine anymore)
 
-            q : quit
+                The history table contains an auto incremented history id, file hash*,
+                and date (relating to local time on the machine)
+
+            > File Hash
+
+                The hashing method is based on the files meta data. It uses the artist,
+                album, and track name, and track number to generate the hash. This makes
+                the hashing very sensitive to any differences in metadata. Two files with
+                identical audio data but differ slightly in any of the mentioned meta data
+                (i.e spelling, special characters, spaces, excluding case) will produce a
+                different hash. Two files with identical meta data but different audio
+                data will produce identical hashes
+
+                (I chose this method to produce a hash instead of using the audio data as
+                the input b/c it took forever to scan through files when having to read
+                through gigabytes of audio data)
+
+            > Viewing your data
+
+                UPLOAD THE PYTHON FILE TO GITHUB FIRST
+
+        -- Controls --
+
+            > Navigation
+
+                j | Down Arrow | Down Scroll    : Scroll down
+                k | Up Arrow | Up Scroll        : Scroll up
+                Space                           : Expand/Collapse folder
+                Enter                           : Add track/folder contents to queue
+
+            > Playback
+
+                p                               : Pause/Unpause player
+                s (lowecase)                    : Skip current track
+                c                               : Clear queue
+                v (lowercase)                   : Volume down
+                V (uppercase)                   : Volume up
+                Left Arrow                      : Seek back 10 seconds
+                Right Arrow                     : Seek forward 10 seconds
+                l                               : loop current track (indefinitely)
+                S (uppercase)                   : shuffle queue
+
+            > Misc
+
+                ` (backtick) | ~ (tilde)        : Switches view between queue and file tree
+                q                               : quit
 
         """)
     }
@@ -974,7 +1021,9 @@ struct Output {
         print(output)
     }
 
-    static func fillQueue(lines: Deque<String>, looping: Bool) {
+    static func fillQueue(queue nodes: Deque<Node>, looping: Bool) {
+        if !Terminal.shared.showQueue {return}
+
         let emptyLine: String = (String(repeating: " ", count: Terminal.shared.columns))
 
         var output: String = ""
@@ -984,14 +1033,14 @@ struct Output {
             let emptyCursorPos = "\u{001B}[\(rowNum + BORDER_OFFSET + 1);2H"
             let lineCursorPos = "\u{001B}[\(rowNum + BORDER_OFFSET + 1);\(QUEUE_NAME_OFFSET)H"
 
-            if rowNum == 0 && lines.count > 0 {
+            if rowNum == 0 && nodes.count > 0 {
                 let status  : String = looping ? "🎵 🔁 " : "🎵 "
                 let spacing : Int = looping ? 7 : 4
 
-                output += "\(emptyCursorPos)\(emptyLine)\(lineCursorPos)\(status)\(lines[rowNum].prefix(Terminal.shared.columns - spacing))\n"
+                output += "\(emptyCursorPos)\(emptyLine)\(lineCursorPos)\(status)\(nodes[rowNum].name.prefix(Terminal.shared.columns - spacing))\n"
             }
-            else if rowNum < lines.count {
-                output += "\(emptyCursorPos)\(emptyLine)\(lineCursorPos)\(lines[rowNum].prefix(Terminal.shared.columns - BORDER_OFFSET))\n"
+            else if rowNum < nodes.count {
+                output += "\(emptyCursorPos)\(emptyLine)\(lineCursorPos)\(nodes[rowNum].name.prefix(Terminal.shared.columns - BORDER_OFFSET))\n"
             } else {
                 output += "\(emptyCursorPos)\(emptyLine)\n"
             }
@@ -1013,9 +1062,9 @@ struct Output {
         let columns: Int = Terminal.shared.columns
 
         print(
-            "\u{001B}[\(rows+3);H",
+            "\u{001B}[\(rows+4);H",
             String(repeating: " ",count: columns+2),
-            "\u{001B}[\(rows+3);H",
+            "\u{001B}[\(rows+4);H",
             "ROWS: \(rows), UPPER: \(view.viewRange.min), LOWER : \(view.viewRange.max), MAX : \(view.totalRange), LINE NUM : \(view.relativeLineNum)",
             separator: "",
             terminator: ""
@@ -1059,7 +1108,7 @@ struct Output {
             print(
                 "\u{001B}[\(Terminal.shared.rows+3);H\(String(repeating: " ", count: Terminal.shared.columns + 2))",
                 terminator: ""
-                )
+            )
         }
         fflush(stdout)
     }
@@ -1082,6 +1131,7 @@ enum Keys {
     case scrollUp
     case seekBackward
     case seekForward
+    case shuffleQueue
     case skip
     case switchView
     case volumeDown
@@ -1096,11 +1146,12 @@ enum Keys {
         113 : .quit,            // q
         106 : .scrollDown,      // j
         107 : .scrollUp,        // k
-        115 : .skip,            // s
+        83  : .shuffleQueue,    // Uppercase S
+        115 : .skip,            // Lowercase s
         96  : .switchView,      // btick (`)
         126 : .switchView,      // tilde (~)
         86  : .volumeUp,        // Uppercase V
-        118 : .volumeDown,      // Lowecase v
+        118 : .volumeDown,      // Lowercase v
     ]
 
     static func getKeyboardInput(c: UInt8) -> Keys? {
@@ -1269,6 +1320,7 @@ struct Input {
     static func changeVolume(audioPlayer: AudioPlayer, volumeUp: Bool) {Task {await audioPlayer.volume(up: volumeUp)}}
     static func toggleLoop(audioPlayer: AudioPlayer) {Task {await audioPlayer.toggleLoop()}}
     static func seek(audioPlayer: AudioPlayer, forward: Bool) {Task {await audioPlayer.seek(forward: forward)}}
+    static func shuffle(audioPlayer: AudioPlayer) {Task {await audioPlayer.shuffle()}}
 
     static func switchView(view: View, audioPlayer: AudioPlayer) {
         Terminal.shared.showQueue = !Terminal.shared.showQueue
@@ -1279,7 +1331,7 @@ struct Input {
             Task {
                 let queue = await audioPlayer.queue
                 let looping = await audioPlayer.looping
-                Output.fillQueue(lines: Deque<String>(queue.map{$0.name}), looping: looping)
+                Output.fillQueue(queue: queue, looping: looping)
                 semaphore.signal()
             }
             semaphore.wait()
@@ -1355,6 +1407,7 @@ input.setEventHandler {
         case .quit          : Input.quit(input: input, Exit: &Exit)
         case .seekBackward  : Input.seek(audioPlayer: audioPlayer, forward: false)
         case .seekForward   : Input.seek(audioPlayer: audioPlayer, forward: true)
+        case .shuffleQueue  : Input.shuffle(audioPlayer: audioPlayer)
         case .skip          : Input.skipTrack(audioPlayer: audioPlayer)
         case .switchView    : Input.switchView(view: filesView, audioPlayer: audioPlayer)
         case .volumeDown    : Input.changeVolume(audioPlayer: audioPlayer, volumeUp: false)
