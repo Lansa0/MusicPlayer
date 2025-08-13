@@ -1,7 +1,6 @@
-// v1.11.19
-// Added shuffle function
-// Reworked fillQueue function
-// Fixed debug line to work with progress bar
+// v1.11.21
+// Refactor on scanFiles
+// Visual volume
 
 import AVFoundation
 import Collections
@@ -101,8 +100,11 @@ class Terminal {
     var rows    : Int = 0
     var columns : Int = 0
 
+    // Prevent having to retrive these values from the AudioPlayer
+    // everytime the window is resized
     var lastKnownCurrentTime : TimeInterval?
     var lastKnownDuration    : TimeInterval?
+    var lastKnownVolume      : Float = 0.5
 
     /// - Parameters:
     ///   - view: Current view parameters
@@ -136,6 +138,7 @@ class Terminal {
         } else {
             Output.drawBorder(rows: self.rows, columns: self.columns)
             Output.progressBar(currentTime: nil, duration: nil)
+            Output.volume(vol: 0.5)
 
             view.lineDeque.append(contentsOf: rootFile.getNodes(range: view.viewRange))
             Output.fillTree(lines: view.lineDeque)
@@ -180,6 +183,7 @@ class Terminal {
 
             Output.drawBorder(rows: self.rows, columns: self.columns)
             Output.progressBar(currentTime: self.lastKnownCurrentTime, duration: self.lastKnownDuration)
+            Output.volume(vol: self.lastKnownVolume)
 
             // Refer to Tests/window_size/main.swift to make sense of this
             if expanding {
@@ -543,148 +547,148 @@ struct FileHandler {
         var isDirectory: ObjCBool = false
         let musicFolderURL: URL = URL(filePath: configData.path)
 
-        if fileManager.fileExists(atPath: musicFolderURL.path(), isDirectory: &isDirectory) && isDirectory.boolValue {
-
-            let rootNode = Node(name: "All Music")
-            rootNode.toggleActive()
-
-            var folderStack: [URL] = [musicFolderURL]
-
-            do {
-                var fileCount: Int = 0
-                var filesSkipped: Int = 0
-
-                print("Files Loaded  :\nFiles Skipped :", terminator: "\u{001B}[1F")
-
-                Database.shared.openConnection()
-
-                while !folderStack.isEmpty {
-                    let folder: URL = folderStack.popLast()!
-
-                    let fileURLS: [URL] = try fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
-
-                    for url: URL in fileURLS {
-                        if (try url.resourceValues(forKeys: [.isDirectoryKey])).isDirectory! {
-                            folderStack.append(url)
-
-                        } else if url.pathExtension == "mp3" {
-                            let asset = AVURLAsset(url: url)
-                            let semaphore = DispatchSemaphore(value: 0)
-
-                            var fileSkipped: Bool = true
-
-                            var artistValue : String?
-                            var albumValue  : String?
-                            var titleValue  : String?
-                            var trackNumber : Int?
-                            var discNumber  : Int?
-
-                            Task {
-                                for format in try await asset.load(.availableMetadataFormats) {
-                                    let metadata = try await asset.loadMetadata(for: format)
-
-                                    guard let artistMetadata    = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .id3MetadataBand).first ??
-                                                                  AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierArtist).first else {continue}
-                                    guard let albumMetadata     = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierAlbumName).first else {continue}
-                                    guard let titleMetadata     = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierTitle).first else {continue}
-                                    guard let trackNumMetadata  = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .id3MetadataTrackNumber).first ??
-                                                                  metadata.first(where: {($0.key as? String)?.uppercased() == "TRK" && $0.keySpace?.rawValue == "org.id3"}) else {continue}
-
-                                    fileSkipped = false
-
-                                    artistValue = try await artistMetadata.load(.stringValue)!
-                                    albumValue  = try await albumMetadata.load(.stringValue)!
-                                    titleValue  = try await titleMetadata.load(.stringValue)!
-
-                                    let trackNumString = try await trackNumMetadata.load(.stringValue)!
-                                    trackNumber = Int(trackNumString.split(separator: "/", maxSplits: 2, omittingEmptySubsequences: true)[0])!
-
-                                    if let discNumMetaData = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .id3MetadataPartOfASet).first {
-                                        let discNumberString = try await discNumMetaData.load(.stringValue)!
-                                        discNumber = Int(discNumberString.split(separator: "/", maxSplits: 2, omittingEmptySubsequences: true)[0])!
-                                    }
-                                }
-                                semaphore.signal()
-                            }
-
-                            semaphore.wait()
-
-                            if !fileSkipped {
-
-                                let hash: String = hashFile(
-                                    artist: artistValue!,
-                                    album:  albumValue!,
-                                    track: titleValue!,
-                                    track_num: trackNumber!
-                                )
-
-                                let artistNode: Node
-                                if let nodeIndex = rootNode.nodes.firstIndex(where: {$0.name == artistValue!}) {
-                                    artistNode = rootNode.nodes[nodeIndex]
-                                } else {
-                                    artistNode = Node(name: artistValue!)
-                                    rootNode.add(artistNode)
-                                }
-
-                                let albumNode: Node
-                                if let nodeIndex = artistNode.nodes.firstIndex(where: {$0.name == albumValue!}) {
-                                    albumNode = artistNode.nodes[nodeIndex]
-                                } else {
-                                    albumNode = Node(name: albumValue!)
-                                    artistNode.add(albumNode)
-                                }
-
-                                let trackNode: Node = Node(
-                                    name: titleValue!,
-                                    url: url,
-                                    file_hash: hash,
-                                    trackNumber: trackNumber,
-                                    discNumber: discNumber
-                                )
-                                albumNode.add(trackNode)
-
-                                Database.shared.addFile(
-                                    file_hash: hash,
-                                    artist: artistValue!,
-                                    album:  albumValue!,
-                                    track: titleValue!
-                                )
-
-                                fileCount += 1
-                                print("\u{001B}[16C\(fileCount)", terminator: "\r")
-
-                            } else {
-                                filesSkipped += 1
-                                print("\u{001B}[1B\u{001B}[16C\(filesSkipped)", terminator: "\u{001B}[1F")
-                            }
-                            fflush(stdout)
-
-                        }
-                    }
-                }
-
-                Database.shared.closeConnection()
-                print("\u{001B}[1B")
-
-                // Deeply sort node
-                var nodeStack: [Node] = [rootNode]
-                nodeStack.reserveCapacity(fileCount)
-                while let node = nodeStack.popLast() {
-                    node.sort()
-                    nodeStack.append(contentsOf: node.nodes)
-                }
-
-                self.encodeNode(root: rootNode)
-
-                return rootNode
-            } catch {
-                print(error)
-                exit(1)
-            }
+        if !(fileManager.fileExists(atPath: musicFolderURL.path(), isDirectory: &isDirectory) && isDirectory.boolValue) {
+            print("Unable to open folder \(musicFolderURL.path())")
+            exit(1)
         }
 
-        print("Unable to open folder \(musicFolderURL.path())")
-        exit(1)
+        let rootNode = Node(name: "All Music")
+        rootNode.toggleActive()
+
+        var folderStack: [URL] = [musicFolderURL]
+
+        do {
+            var fileCount: Int = 0
+            var filesSkipped: Int = 0
+
+            print("Files Loaded  :\nFiles Skipped :", terminator: "\u{001B}[1F")
+
+            Database.shared.openConnection()
+
+            while !folderStack.isEmpty {
+                let folder: URL = folderStack.popLast()!
+
+                let fileURLS: [URL] = try fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+
+                for url: URL in fileURLS {
+                    if (try url.resourceValues(forKeys: [.isDirectoryKey])).isDirectory! {
+                        folderStack.append(url)
+                    } else if url.pathExtension == "mp3" {
+                        let asset = AVURLAsset(url: url)
+                        let semaphore = DispatchSemaphore(value: 0)
+
+                        var fileSkipped: Bool = true
+
+                        var artistValue : String?
+                        var albumValue  : String?
+                        var titleValue  : String?
+                        var trackNumber : Int?
+                        var discNumber  : Int?
+
+                        Task {
+                            for format in try await asset.load(.availableMetadataFormats) {
+                                let metadata = try await asset.loadMetadata(for: format)
+
+                                guard let artistMetadata    = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .id3MetadataBand).first ??
+                                                              AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierArtist).first else {continue}
+                                guard let albumMetadata     = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierAlbumName).first else {continue}
+                                guard let titleMetadata     = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierTitle).first else {continue}
+                                guard let trackNumMetadata  = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .id3MetadataTrackNumber).first ??
+                                                              metadata.first(where: {($0.key as? String)?.uppercased() == "TRK" && $0.keySpace?.rawValue == "org.id3"}) else {continue}
+
+                                fileSkipped = false
+
+                                artistValue = try await artistMetadata.load(.stringValue)!
+                                albumValue  = try await albumMetadata.load(.stringValue)!
+                                titleValue  = try await titleMetadata.load(.stringValue)!
+
+                                let trackNumString = try await trackNumMetadata.load(.stringValue)!
+                                trackNumber = Int(trackNumString.split(separator: "/", maxSplits: 2, omittingEmptySubsequences: true)[0])
+
+                                if let discNumMetaData = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .id3MetadataPartOfASet).first {
+                                    let discNumberString = try await discNumMetaData.load(.stringValue)!
+                                    discNumber = Int(discNumberString.split(separator: "/", maxSplits: 2, omittingEmptySubsequences: true)[0])
+                                }
+                            }
+                            semaphore.signal()
+                        }
+
+                        semaphore.wait()
+
+                        if !fileSkipped {
+
+                            let hash: String = hashFile(
+                                artist: artistValue!,
+                                album:  albumValue!,
+                                track: titleValue!,
+                                track_num: trackNumber!
+                            )
+
+                            // Bit of an eyesore but too lazy to refactor this
+
+                            let artistNode: Node
+                            if let nodeIndex = rootNode.nodes.firstIndex(where: {$0.name == artistValue!}) {
+                                artistNode = rootNode.nodes[nodeIndex]
+                            } else {
+                                artistNode = Node(name: artistValue!)
+                                rootNode.add(artistNode)
+                            }
+
+                            let albumNode: Node
+                            if let nodeIndex = artistNode.nodes.firstIndex(where: {$0.name == albumValue!}) {
+                                albumNode = artistNode.nodes[nodeIndex]
+                            } else {
+                                albumNode = Node(name: albumValue!)
+                                artistNode.add(albumNode)
+                            }
+
+                            let trackNode: Node = Node(
+                                name: titleValue!,
+                                url: url,
+                                file_hash: hash,
+                                trackNumber: trackNumber,
+                                discNumber: discNumber
+                            )
+                            albumNode.add(trackNode)
+
+                            Database.shared.addFile(
+                                file_hash: hash,
+                                artist: artistValue!,
+                                album:  albumValue!,
+                                track: titleValue!
+                            )
+
+                            fileCount += 1
+                            print("\u{001B}[16C\(fileCount)", terminator: "\r")
+
+                        } else {
+                            filesSkipped += 1
+                            print("\u{001B}[1B\u{001B}[16C\(filesSkipped)", terminator: "\u{001B}[1F")
+                        }
+                        fflush(stdout)
+
+                    }
+                }
+            }
+
+            Database.shared.closeConnection()
+            print("\u{001B}[1B")
+
+            // Deeply sort node
+            var nodeStack: [Node] = [rootNode]
+            nodeStack.reserveCapacity(fileCount)
+            while let node = nodeStack.popLast() {
+                node.sort()
+                nodeStack.append(contentsOf: node.nodes)
+            }
+
+            FileHandler.encodeNode(root: rootNode)
+
+            return rootNode
+        } catch {
+            print(error)
+            exit(1)
+        }
     }
 
     static private func hashFile(artist: String, album: String, track: String, track_num: Int) -> String {
@@ -773,7 +777,7 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
                 player.delegate = self
 
                 self.currentPlayer = player
-                player.setVolume(volume, fadeDuration: 0)
+                player.volume = self.volume
                 player.play()
 
                 self.startTimer()
@@ -840,12 +844,12 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
     }
 
     func volume(up: Bool) {
-        guard let player = self.currentPlayer else {return}
-
         if up {self.volume = min(1.0, self.volume + self.VOLUME_INCREMENT)}
         else  {self.volume = max(0.0, self.volume - self.VOLUME_INCREMENT)}
 
-        player.setVolume(self.volume, fadeDuration: 0)
+        if let player = self.currentPlayer { player.volume = self.volume }
+
+        Output.volume(vol: self.volume)
     }
 
     private func startTimer() {
@@ -897,6 +901,9 @@ actor AudioPlayer: NSObject, AVAudioPlayerDelegate {
 ///////////////////////////////////////////////////////////////////////////
 
 struct Output {
+    private static let VOLUME_OFFSET  : Int = 10
+    private static let ROW_ADJUSTMENT : Int = 3
+
     private static let BORDER_OFFSET : Int = 1
 
     private static let FILE_HEADER  : String = "FILE━TREE"
@@ -1024,6 +1031,9 @@ struct Output {
     static func fillQueue(queue nodes: Deque<Node>, looping: Bool) {
         if !Terminal.shared.showQueue {return}
 
+        let status  : String = looping ? "🎵 🔁 " : "🎵 "
+        let spacing : Int = looping ? 7 : 4
+
         let emptyLine: String = (String(repeating: " ", count: Terminal.shared.columns))
 
         var output: String = ""
@@ -1034,9 +1044,6 @@ struct Output {
             let lineCursorPos = "\u{001B}[\(rowNum + BORDER_OFFSET + 1);\(QUEUE_NAME_OFFSET)H"
 
             if rowNum == 0 && nodes.count > 0 {
-                let status  : String = looping ? "🎵 🔁 " : "🎵 "
-                let spacing : Int = looping ? 7 : 4
-
                 output += "\(emptyCursorPos)\(emptyLine)\(lineCursorPos)\(status)\(nodes[rowNum].name.prefix(Terminal.shared.columns - spacing))\n"
             }
             else if rowNum < nodes.count {
@@ -1090,26 +1097,39 @@ struct Output {
             let a = formatTime(currentTime)
             let b = formatTime(duration)
 
-            // +5 refer to Tests/time_bar/main.swift
-            timeWidth = a.count + b.count + 5
+            // +4 refer to Tests/time_bar/main.swift w/ minor change
+            timeWidth = a.count + b.count + 4
 
-            // 1 beacuse it looks better when you add 1 :p
-            let barWidth: Int = Terminal.shared.columns + 1 - timeWidth
+            let barWidth : Int = Terminal.shared.columns - timeWidth - VOLUME_OFFSET
             let progress : TimeInterval = currentTime / duration
             let left     : Int = max(0,Int(floor(progress * Double(barWidth)))-1)
             let right    : Int = barWidth - (left+1)
 
             print(
-                "\u{001B}[\(Terminal.shared.rows+3);H \(String(repeating: "━", count: left))○\(String(repeating: "-", count: right)) \(a) / \(b)",
+                "\u{001B}[\(Terminal.shared.rows+ROW_ADJUSTMENT);H \(String(repeating: "━", count: left))○\(String(repeating: "-", count: right)) \(a) / \(b)",
                 terminator: ""
             )
         }
         else {
+            let barWidth : Int = Terminal.shared.columns - 15 - VOLUME_OFFSET
             print(
-                "\u{001B}[\(Terminal.shared.rows+3);H\(String(repeating: " ", count: Terminal.shared.columns + 2))",
+                "\u{001B}[\(Terminal.shared.rows+ROW_ADJUSTMENT);H ○\(String(repeating: "-", count: barWidth)) 00:00 / 00:00",
                 terminator: ""
             )
         }
+        fflush(stdout)
+    }
+
+    static func volume(vol _vol : Float) {
+        Terminal.shared.lastKnownVolume = _vol
+        let vol = Int(round(_vol * 100))
+
+        print(
+            // +3 b/c it works that way, idk why
+            "\u{001B}[\(Terminal.shared.rows+ROW_ADJUSTMENT);\(Terminal.shared.columns - VOLUME_OFFSET + 3)H",
+            "| Vol \(vol)".padding(toLength: 9, withPad: " ", startingAt: 0),
+            separator: "", terminator: ""
+        )
         fflush(stdout)
     }
 
