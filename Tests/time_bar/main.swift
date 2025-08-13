@@ -2,9 +2,9 @@ import AVFoundation
 
 let ABSOLUTE_WIDTH = 200
 
-let file1: URL = URL(filePath: "/Users/jayson/Downloads/Music/Downloads/Postal Service/Give Up/01 - The District Sleeps Alone Tonight.mp3")
-let file2: URL = URL(filePath: "/Users/jayson/Downloads/Music/Downloads/Postal Service/Give Up/02 - Such Great Heights.mp3")
-let file3: URL = URL(filePath: "/Users/jayson/Downloads/Music/Downloads/SoundTracks/Submarine/01 Stuck on the Puzzle (intro).mp3")
+let file1: URL = URL(filePath: "")
+let file2: URL = URL(filePath: "")
+let file3: URL = URL(filePath: "")
 
 func bar(currentTime: TimeInterval, duration: TimeInterval) {
 
