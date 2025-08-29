@@ -1,6 +1,5 @@
-// v1.11.21
-// Refactor on scanFiles
-// Visual volume
+// v1.12.21
+// Refactor Inputs
 
 import AVFoundation
 import Collections
@@ -15,7 +14,8 @@ let CONFIG_PATH : String = ".config/Lansa0MusicPlayer/config.json"
     Add (better) docs for functions
     Work on error handling (might be good enough) (wasn't good enough)
     Argument help messages
-*/
+    Maybe add duration to sql data
+*/          
 
 ///////////////////////////////////////////////////////////////////////////
 //[ARGUMENT/PARSER]////////////////////////////////////////////////////////
@@ -584,7 +584,8 @@ struct FileHandler {
                         var titleValue  : String?
                         var trackNumber : Int?
                         var discNumber  : Int?
-
+                        var duration    : Double?
+                    
                         Task {
                             for format in try await asset.load(.availableMetadataFormats) {
                                 let metadata = try await asset.loadMetadata(for: format)
@@ -595,6 +596,8 @@ struct FileHandler {
                                 guard let titleMetadata     = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierTitle).first else {continue}
                                 guard let trackNumMetadata  = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .id3MetadataTrackNumber).first ??
                                                               metadata.first(where: {($0.key as? String)?.uppercased() == "TRK" && $0.keySpace?.rawValue == "org.id3"}) else {continue}
+
+                                duration = CMTimeGetSeconds(try await asset.load(.duration))
 
                                 fileSkipped = false
 
@@ -963,7 +966,9 @@ struct Output {
 
             > Viewing your data
 
-                UPLOAD THE PYTHON FILE TO GITHUB FIRST
+                Python CLI tool to interact with your playback history database
+
+                https://github.com/Lansa0/LMP_DB
 
         -- Controls --
 
@@ -977,7 +982,7 @@ struct Output {
             > Playback
 
                 p                               : Pause/Unpause player
-                s (lowecase)                    : Skip current track
+                s (lowercase)                   : Skip current track
                 c                               : Clear queue
                 v (lowercase)                   : Volume down
                 V (uppercase)                   : Volume up
@@ -1157,7 +1162,7 @@ enum Keys {
     case volumeDown
     case volumeUp
 
-    private static let KeyCodes: [UInt8 : Keys] = [
+    static let KeyCodes: [UInt8 : Keys] = [
         99  : .clearQueue,      // c
         32  : .expandFolder,    // space
         108 : .loop,            // l
@@ -1174,22 +1179,26 @@ enum Keys {
         118 : .volumeDown,      // Lowercase v
     ]
 
-    static func getKeyboardInput(c: UInt8) -> Keys? {
-        return KeyCodes[c]
-    }
+    static let ArrowCode: [UInt8 : Keys] = [
+        65 : .scrollUp,         // Up Arrow 
+        66 : .scrollDown,       // Down Arrow
+        67 : .seekForward,      // Right Arrow
+        68 : .seekBackward,     // Left Arrow
+    ]
+    
+    // static func getKeyboardInput(c: UInt8) -> Keys? {
+    //     return KeyCodes[c]
+    // }
 
-    static func getArrowInput(c: UInt8) -> Keys? {
-        if c == 65 {return Keys.scrollUp}
-        else if c == 66 {return Keys.scrollDown}
-        else if c == 67 {return Keys.seekForward}
-        else if c == 68 {return Keys.seekBackward}
-        return nil
-    }
-
+    // static func getArrowInput(c: UInt8) -> Keys? {
+    //     return ArrowCode[c]
+    // }
+    
     static func getScrollInput(buffer: [UInt8]) -> Keys? {
         var index = 3
         var cb = ""
-
+        
+        // I forgot how this works but it does
         while index < buffer.count, buffer[index] != 0x3B {
             let scaler = UnicodeScalar(buffer[index])
             cb.append(Character(scaler))
@@ -1406,11 +1415,13 @@ input.setEventHandler {
         key = _key
     }
     else if n == 3 && buff.starts(with: [27, 91]) {
-        guard let _key = Keys.getArrowInput(c: buff[2]) else {return}
+        // guard let _key = Keys.getArrowInput(c: buff[2]) else {return}
+        guard let _key = Keys.ArrowCode[buff[2]] else {return}
         key = _key
     }
     else {
-        guard let _key = Keys.getKeyboardInput(c: buff[0]) else {return}
+        // guard let _key = Keys.getKeyboardInput(c: buff[0]) else {return}
+        guard let _key = Keys.KeyCodes[buff[0]] else {return}
         key = _key
     }
 
